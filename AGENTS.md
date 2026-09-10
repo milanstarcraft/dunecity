@@ -1,5 +1,10 @@
 # AGENTS.md — DuneCity
 
+> **FORK NOTICE — read [`FORK-SETUP.md`](FORK-SETUP.md) first.**
+> This is a Windows fork (`milanstarcraft/dunecity`). The paths and build instructions in
+> this file describe upstream's machines, not this one. The architecture constraints below
+> still apply; the machine-specific parts do not.
+
 ## Read first
 
 1. **`HANDOVER.md`** — state of the current, uncommitted work: what was fixed, what is still

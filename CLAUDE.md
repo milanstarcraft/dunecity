@@ -1,5 +1,10 @@
 # CLAUDE.md — DuneCity
 
+> **FORK NOTICE — read [`FORK-SETUP.md`](FORK-SETUP.md) first.**
+> This is a Windows fork (`milanstarcraft/dunecity`). The paths and build instructions in
+> this file describe upstream's machines, not this one. The architecture constraints below
+> still apply; the machine-specific parts do not.
+
 You are working in `~/development/dunecity`, a Dune Legacy C++17/SDL2 fork with Micropolis-style city simulation integrated into the RTS game loop.
 
 ## First reads
