@@ -7,6 +7,22 @@ Written by "do M" — see `FORK-SETUP.md` §4.
 
 ---
 
+## 2026-09-10 21:17 Belgrade — on upstream 1.0.630
+
+**This fork's rules now live in `CLAUDE.md`, protected from upstream merges.**
+
+- Replaced upstream's `CLAUDE.md` with this fork's own rules. Upstream's machine-specific
+  content and release process were dropped; their architecture constraints were kept,
+  because those are facts about the code, not working preferences.
+- `AGENTS.md` reduced to a pointer at `CLAUDE.md`, so agents looking for it by convention
+  land in the right place instead of upstream's macOS build instructions.
+- `FORK-SETUP.md` deleted — folded into `CLAUDE.md`, which is now the single source of truth.
+- Added `merge=ours` rules to `.gitattributes` for `CLAUDE.md`, `AGENTS.md`,
+  `FORK-CHANGELOG.md` and `.gitattributes` itself. A future merge from upstream keeps this
+  fork's versions with no conflict. Upstream's existing line-ending rules were left intact.
+- Note: the driver is registered with `git config merge.ours.driver true`, which lives in
+  local git config and cannot be committed. A fresh clone must run it once.
+
 ## 2026-09-10 20:56 Belgrade — on upstream 1.0.630
 
 **Added fork working rules for AI agents.**

@@ -1,150 +1,182 @@
-# CLAUDE.md — DuneCity
+# CLAUDE.md — DuneCity (milanstarcraft fork)
 
-> **FORK NOTICE — read [`FORK-SETUP.md`](FORK-SETUP.md) first.**
-> This is a Windows fork (`milanstarcraft/dunecity`). The paths and build instructions in
-> this file describe upstream's machines, not this one. The architecture constraints below
-> still apply; the machine-specific parts do not.
+Rules for AI agents working in this repository. **Read this file in full before any task.**
 
-You are working in `~/development/dunecity`, a Dune Legacy C++17/SDL2 fork with Micropolis-style city simulation integrated into the RTS game loop.
+This file belongs to this fork and replaces upstream's version. It is protected by a
+`merge=ours` rule in `.gitattributes`, so a future merge from upstream will never overwrite
+it. Do not restore upstream's content here.
 
-## First reads
+---
 
-Before making non-trivial changes, read:
+## 1. Project
 
-1. `ARCHITECTURE.md` — repo-root entry point and settled constraints
-2. `docs/dunecity-current-architecture.md` — code-verified current implementation state
-3. `README.md` — project overview/build commands
-4. Relevant source files for the task
+A Dune Legacy fork: C++17 / SDL2 real-time strategy, with a Micropolis-style city
+simulation built into the RTS game loop. The game ships with all original Dune II PAK
+files in `data/`, so it runs without a copy of the 1992 game.
 
-For deeper background only when needed:
+| | |
+|---|---|
+| This fork | `milanstarcraft/dunecity` — remote `origin` |
+| Upstream | `VR48/dunecity` — remote `upstream`, **read-only** |
+| Working branch | `my-dev` — all work goes here |
+| `main` | mirror of upstream as it was at fork time; do not commit to it |
 
-- `analysis/delivery-summary.md` — historical integration summary; useful but may be stale versus current code
-- `analysis/architecture-comparison.md`
-- `analysis/dunelegacy-architecture.md`
-- `analysis/simcity-architecture.md`
-- `scripts/SPRITE-IMPORT.md` for sprite/art pipeline work
+The push URL for `upstream` is deliberately invalid, so `git push upstream` fails loudly
+instead of writing to someone else's repository.
 
-## Hard architecture constraints
+**Never push to upstream and never open a pull request against it.** Nothing goes to VR48
+unless the owner asks for it explicitly.
 
-- R/C/I zones stay **2x2 in gameplay footprint**.
-- Do **not** convert simulation, placement, or zoning rules to 3x3.
-- Micropolis/SimCity 3x3 art may be referenced/imported, but adapt/render it cleanly inside the 2x2 gameplay footprint.
-- Tiles remain the current substrate for city state and overlays.
-- Lot objects are a possible future architecture, not an opportunistic refactor.
-- **Roads are player-built structures**, alongside but separate from concrete slabs. Like Slab1, a Road is special-cased in `House::placeStructure` to mutate a tile flag (`Tile::isRoad_`) rather than spawning a `StructureBase` — so roads aren't selectable. Roads only appear in the build menu when city-sim mode is active (gated in `BuilderBase::updateBuildList`). Cost defaults to 10 credits; build is instant in city mode.
-- Concrete slabs (Slab1/Slab4) and Roads are **independent tile states**. Concrete renders as concrete; roads render as an auto-tiled overlay sprite drawn on top of the underlying rock terrain. They do not share rendering or placement logic.
-- **Power flows globally** based on `producedPower >= powerRequirement` on the structure's owner. There is no per-tile electrical grid and no power lines. `Tile::cityPowered_` exists in save format but is unused; the legacy `cityConductive_` was renamed to `isRoad_`.
-- Dune-style power remains; WindTraps and the city-mode Nuclear Plant feed the same global house-power pool.
+## 2. Build
+
+Real paths are in `LOCAL-PATHS.md`, which is deliberately not committed. Read it first.
+If it is missing, ask the owner rather than guessing.
+
+```
+cmake -S <source> -B <build folder> -G "Visual Studio 18 2026" -A x64 \
+      -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake \
+      -DVCPKG_INSTALLED_DIR=C:/vcpkg-installed/dunecity
+
+cmake --build <build folder> --target installer --config Release
+```
+
+Use the CMake bundled with Visual Studio 2026 (4.x). The one bundled with Build Tools 2019
+is 3.20 and does not know the `Visual Studio 18 2026` generator.
+
+### Two hard rules, both learned the painful way
+
+**Never build inside the Dropbox folder.** Dropbox holds file handles open on the tree and
+build steps fail at random with `Device or resource busy` or `Error removing directory` —
+then the same command succeeds by hand seconds later. Adding the folder to
+`rules.dropboxignore` does **not** help: Dropbox must still watch a folder to apply a rule,
+and the watching is what locks files. The build folder lives on another drive, outside
+Dropbox. Keep it there.
+
+**Never let vcpkg's install directory contain square brackets.** CMake treats `[` and `]`
+as special characters, and vcpkg writes absolute paths into the config files it generates.
+A bracket produces a failure that blames a library instead of the folder:
+
+```
+ninja: error: 'SDL2::SDL2-NOTFOUND', needed by 'SDL2_mixerd.dll'
+```
+
+Hence `-DVCPKG_INSTALLED_DIR=C:/vcpkg-installed/dunecity` on every configure. The build
+folder itself may contain brackets; the vcpkg install dir may not.
+
+### What a healthy build looks like
+
+- Cold vcpkg cache: configure takes ~8 minutes. Warm: ~1.5 minutes.
+- The C++ compiles with **zero errors and roughly 5,000 warnings** on MSVC 2026. That is
+  normal for this codebase on a newer compiler. **Do not "fix" the warnings as a side quest.**
+- `--target installer` produces `DuneCity-<version>-Windows-x64.exe` in the build folder root,
+  and the game at `bin\Release\dunecity.exe`. NSIS must be installed.
+  `WINDOWS_QUICKSTART.md` claims CMake installs NSIS automatically — it does not.
+
+Upstream's `AGENTS.md` and `WINDOWS_QUICKSTART.md` describe other machines (macOS/Homebrew,
+"no vcpkg", `~/development/dunecity`). Ignore their build instructions. Use this section.
+
+## 3. "do M" — the maintenance action
+
+When the owner types **"do M"** or asks for a commit, do all of this, in order:
+
+1. **Commit** to `my-dev` with a message describing *why*, not just what.
+2. **Add a changelog entry** to `FORK-CHANGELOG.md`, newest first, with Belgrade local time
+   and the upstream version the work sits on:
+   `## 2026-09-10 20:56 Belgrade — on upstream 1.0.630`
+3. **Update any documentation the change affects**, including this file if a rule changed.
+4. **Push** to `origin` with `git push`.
+
+Never run "do M" just because a task finished. Only when asked.
+
+**The fork is public.** Never commit secrets, tokens, credentials or personal data. Machine
+paths belong in `LOCAL-PATHS.md`, which is excluded from Git.
+
+Recommended, not required: if you changed C++, build before committing. A broken commit on
+a public fork is visible to everyone.
+
+## 4. Architecture constraints — these are facts about the code
+
+Inherited from upstream and still true. Breaking them breaks the game.
+
+- R/C/I zones stay **2x2 in gameplay footprint**. Do not convert simulation, placement or
+  zoning rules to 3x3. Micropolis 3x3 art may be imported, but adapt it inside the 2x2
+  gameplay footprint.
+- Tiles remain the substrate for city state and overlays. Lot objects are a possible future
+  architecture, not an opportunistic refactor.
+- **Roads are player-built structures** but are special-cased in `House::placeStructure` to
+  flip a tile flag (`Tile::isRoad_`) rather than spawn a `StructureBase` — so roads are not
+  selectable. They appear in the build menu only in city-sim mode
+  (`BuilderBase::updateBuildList`). Cost 10 credits, instant build.
+- Concrete slabs (Slab1/Slab4) and roads are **independent tile states**. Concrete renders as
+  concrete; roads render as an auto-tiled overlay on the underlying rock. They share no
+  rendering or placement logic.
+- **Power is global**, based on `producedPower >= powerRequirement` for the structure's owner.
+  There is no per-tile grid and no power lines. `Tile::cityPowered_` exists in the save format
+  but is unused; the old `cityConductive_` was renamed to `isRoad_`.
 - Preserve deterministic simulation and save/load compatibility.
 
-## Workspace boundaries
+**The classic trap:** solving a 3x3 art or rendering problem by accidentally changing the
+2x2 gameplay architecture. If a task tempts you to redesign zoning, stop and write down the
+tradeoff first.
 
-- Edit files under `~/development/dunecity` only unless explicitly instructed.
-- `../simcity` is read-only Micropolis reference.
-- Do not hand-edit generated/imported assets unless the task is specifically about the asset pipeline.
+### Where the code lives
 
-## Likely touch points
+- City simulation: `include/dunecity/`, `src/dunecity/`, `Tile.{h,cpp}`, `Game.{h,cpp}`, `Command.{h,cpp}`
+- Zones/build/render: `src/structures/ZoneStructure.cpp`, `ConstructionYard.cpp`,
+  `BuilderBase.cpp`, `src/FileClasses/GFXManager.cpp`
+- Sprite pipeline: `scripts/import-micropolis.py`, `scripts/import-sprites.py`, `imported_sprites/`
+- Tests: `tests/`, `tests/CMakeLists.txt`
 
-City simulation:
+Deeper background: `ARCHITECTURE.md`, `docs/dunecity-current-architecture.md`, and
+`analysis/` (historical, may be stale).
 
-- `include/dunecity/`
-- `src/dunecity/`
-- `include/Tile.h`, `src/Tile.cpp`
-- `include/Game.h`, `src/Game.cpp`
-- `include/Command.h`, `src/Command.cpp`
+### Versioning
 
-Zone/build/render work:
+The app version lives in three files — `CMakeLists.txt`, `include/config.h`, `vcpkg.json` —
+kept in sync by `scripts/bump-version.sh`. Never hand-edit them separately.
 
-- `src/structures/ZoneStructure.cpp`
-- `include/structures/ZoneStructure.h`
-- `src/structures/ConstructionYard.cpp`
-- `src/structures/BuilderBase.cpp`
-- `src/FileClasses/GFXManager.cpp`
-- `include/FileClasses/GFXManager.h`
-- `scripts/import-micropolis.py`
-- `scripts/import-sprites.py`
-- `imported_sprites/`
+This fork does not publish releases, so upstream's tagging and CI rules do not apply here.
+The version is only a marker of which upstream code this fork sits on.
 
-Tests:
+## 5. Working agreements
 
-- `tests/`
-- `tests/CMakeLists.txt`
+- **Q&A mode**: if the owner's message contains `q:` or `Q:`, answer only. No file changes.
+- **Scope discipline**: do exactly what was asked. Flag unrelated problems you notice instead
+  of fixing them unprompted. Ask before expanding scope.
+- **Prefer small, compileable changes.** Fix the direct cause before broad refactors.
+- **Add or update tests** when touching placement, rendering lookup, command routing,
+  save/load, or city-sim behaviour.
+- **Every source change ends up in git.** When you finish, `git status` must show no
+  untracked `.h`/`.cpp`/`.py` files. Upstream once shipped a release built from 88 modified
+  plus 23 untracked files — do not repeat that.
+- **Temporary scripts** start with `// TEMPORARY UTILITY: [purpose]. Date: [date]` and are
+  deleted after use. **Reusable scripts** use `// REUSABLE UTILITY: [purpose]. Created:
+  [date]. Last used: [date]` — update `Last used:` whenever you run one.
+- **No agent scratch notes in the repo root.** `.gitignore` already excludes `/AI-*.md` and
+  `/*-REVIEW.md`. Anything worth keeping goes into `FORK-CHANGELOG.md` or `docs/`.
+- **Do not hand-edit generated or imported assets** unless the task is about the asset pipeline.
 
-## Versioning
+## 6. Upstream: merging is optional and rare
 
-The canonical app version lives in three source-controlled files, kept in sync by `scripts/bump-version.sh`:
+The owner does not routinely pull upstream changes. This fork has diverged on purpose.
 
-```bash
-scripts/bump-version.sh 1.0.8          # set version
-scripts/bump-version.sh --check        # verify all files agree
-scripts/bump-version.sh 1.0.8 --dry-run  # preview changes
-```
-
-Tag releases use `vX.Y.Z` (e.g. `v1.0.8`). CI verifies that source metadata already matches the tag before building; it will not auto-bump for you.
-
-Do not hand-edit `CMakeLists.txt` project VERSION, `include/config.h` VERSION, or `vcpkg.json` version separately. Use the script.
-
-Generated build outputs (`build/include/config.h`, app bundle `Info.plist`) are not source of truth -- they are derived at configure/build time from `CMakeLists.txt`.
-
-Release/version rule: any user-visible release build, tag, or CI-triggering push must include the intended version bump in the same commit as the release work. Before saying a release is tagged, pushed, building in CI, or ready for Stefan to test, run:
+If a merge is ever requested:
 
 ```bash
-scripts/bump-version.sh --check
-git diff -- CMakeLists.txt include/config.h vcpkg.json
-git tag --points-at HEAD
+git fetch upstream
+git merge upstream/main
 ```
 
-If the tag is meant to be `vX.Y.Z`, the checked version must be exactly `X.Y.Z`. If it is not, stop and fix the version before tagging or reporting completion.
+`.gitattributes` marks `CLAUDE.md`, `AGENTS.md` and `FORK-CHANGELOG.md` as `merge=ours`, so
+this fork's versions survive untouched and produce no conflicts.
 
-## Build/test commands
-
-Use targeted verification. Start with:
+That protection needs a one-time local setup per clone, because merge drivers live in local
+config and cannot be committed. If it is missing, run:
 
 ```bash
-cmake --build build --target dunelegacy
-cmake --build build --target dunelegacy_tests
-./build/tests/dunelegacy_tests
+git config merge.ours.driver true
 ```
 
-For every Claude implementation run that changes gameplay, UI, assets, config,
-or release/version behaviour, leave a locally built version in Stefan's dev
-checkout before reporting completion:
+Verify with `git check-attr merge CLAUDE.md` — it must report `merge: ours`.
 
-```bash
-cd /Users/stefanclaw/development/dunecity
-cmake --build build --target dunelegacy
-open build/bin/dunecity.app
-```
-
-The `open` command is optional and only for manual smoke testing; the required
-deliverable is that `build/bin/dunecity.app` is rebuilt in the dev folder so
-Stefan can launch it. If the local build tree is stale or the target names have
-drifted, fix the build-tree issue or report the exact blocker instead of
-claiming the feature is done.
-
-For builds intended for Stefan or a release tag, verify the source-controlled
-version first with `scripts/bump-version.sh --check`, then rebuild. Do not rely
-on an already-open app bundle, a stale build tree, or a tag name as proof of the
-visible version.
-
-If those fail because the local build tree is stale or target names differ, inspect `README.md`, `BUILD.md`, `CMakeLists.txt`, and `tests/CMakeLists.txt` before changing build configuration.
-
-## Style of work
-
-- Prefer small, compileable changes.
-- Fix the direct cause before broad refactors.
-- Add/update tests when touching placement, rendering lookup, command routing, save/load, or city sim behaviour.
-- Keep DuneCity-specific logic clearly named and isolated where possible.
-- If a task tempts you to redesign zoning, stop and write the tradeoff down first.
-
-The main trap: solving a 3x3 art/rendering problem by accidentally changing the 2x2 gameplay architecture. Don’t step on the rake. It has teeth.
-
-## Release and hosting handover
-
-Before release, website or SourceForge work, read [docs/release-operations.md](docs/release-operations.md)
-and [docs/sourceforge-releases.md](docs/sourceforge-releases.md). They map the three repositories,
-automated versus manual publishing, verification and recovery commands. SourceForge Files
-contains binaries, notes and checksums only; link to tagged Git source, never upload a source archive.
-Keep these runbooks current when changing deployment behaviour. Credentials live in GitHub
-Actions secrets/local SSH storage, never in these documents. Verify current service state;
-historical HANDOVER entries are dated evidence, not claims that a deployment is still pending.
+Everything else merges normally, so expect conflicts in source files this fork has touched.

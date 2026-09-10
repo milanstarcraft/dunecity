@@ -3,3 +3,16 @@ mods/Tornie/**/*.ini text eol=lf
 mods/Tornie/**/*.json text eol=lf
 mods/Tornie/**/*.md text eol=lf
 mods/Tornie/**/*.sha256 text eol=lf
+
+# --- Fork-owned files: this fork's version always wins on merge, no conflict ---
+# Requires a one-time local setup per clone, because merge drivers live in local
+# git config and cannot be committed:
+#
+#     git config merge.ours.driver true
+#
+# Verify with:  git check-attr merge CLAUDE.md   ->  must say "merge: ours"
+
+CLAUDE.md         merge=ours
+AGENTS.md         merge=ours
+FORK-CHANGELOG.md merge=ours
+.gitattributes    merge=ours
