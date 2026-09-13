@@ -1,3 +1,1869 @@
+## 2026-09-14 — Campaign AI release 1.0.682 published
+
+PR #33 merged/tagged at d2dc426. Stable CI 34764559810 passed all platform builds
+and tests; six downloaded GitHub packages match their published hashes.
+SourceForge 34765728864 verified upload readbacks, dedicated source refs and
+all three OS defaults. Website 9c82c5f publishes the exact stable browser artifact;
+Deploy 34765821210, Web security 34765821206 and CodeQL 34765821213 passed.
+Public manifest and all seven file hashes verify version 682/source d2dc426.
+Combined campaign/map-browser release copy and the co-op guide are retained.
+
+71 native scenarios finished naturally (46 wins, 25 losses): zero crashes,
+no worker-cap overshoots, every enemy launched an attack, and all 21 advanced
+level-9 helpers reached 15 workers. This is not a human win-rate assessment.
+The tagged browser artifact also won Atreides level 4 Easy/Easy naturally in
+15 game minutes, score 446; player/enemy kills 54/18. The player's house receives
+the statistics. Earlier combined-build level-1 browser victory also verified.
+
+Full evidence and publication links: [campaign-ai-release-682.md](docs/campaign-ai-release-682.md).
+The subsequent Discord signaling work in PR #37 is server-only; preserve that
+newer service on future browser publications. No installed app was replaced.
+
+## 2026-09-14 — Direct-P2P Discord announcements repaired (server-only)
+
+Custom lobbies bypass the legacy metaserver, which was the only Discord notification
+path. The signaling service now calls a trusted local deployment hook after host
+seating and match start, with a bounded snapshot that excludes all invitation and
+transport credentials. Retries/recovered seating do not duplicate events; hook
+errors cannot break hosting. The website owns delivery using the existing webhook.
+Stefan requested both public and private announcements, omitting private codes.
+166 real-HTTP signaling tests pass, including custom/coop, public/private,
+recovery/start deduplication and notification failure isolation. No client protocol,
+C++ source, simulation or browser binary changes; server infrastructure is deployed
+separately from game releases. Publication is recorded in the website deployment.
+
+## 2026-09-14 — Combined release candidate renumbered 1.0.682
+
+Main advanced to 72ef00f (1.0.681 restored Custom Game map browser) while
+campaign PR #33 was testing. Integrated that change and bumped to 1.0.682.
+The campaign engine/AI is unchanged from the 71-scenario 680 validation.
+Rebuilding native/browser and rerunning the combined menu tests before merge.
+The separate 1.0.681 publication is not cancelled.
+
+## Original custom map browser restored — 1.0.681 published, 14 September 2026
+
+Stefan correctly reported that restoring the classic player layout had left
+custom map selection reduced to a dropdown. The original CustomGameMenu was
+still present but bypassed by playCustomGame. The unified custom flow now starts
+with that scrolling map list, five original categories, preview, metadata and
+mod/rule controls. Offline/Online and visibility are available before Players.
+The existing classic player setup, explicit open-seat hosting and direct-P2P
+lobby flow are preserved. Back, Escape and Browse Maps return to map selection
+with the roster retained; choosing a different map/mod resets incompatible seats.
+The current selected map is restored, falling back to All Maps if a quick player
+screen selection is outside the previous category. Mod defaults update before
+editing Game Rules. Uppercase map extensions resolve through the legacy helper.
+
+The native probe now checks map-browser presence and rendering at 640×480,
+854×480 and 1280×720, both connection modes, selected-map preservation and the
+roster round trip. All seven CTest groups pass. The final isolated browser build passes dependency and bundled-mod audits.
+Interactive checks confirm Custom Game opens the full browser, MP Maps filters
+the list, preview follows selection, Online carries into Players, and Browse
+Maps/Escape preserve the selected map and Atreides roster choice.
+
+PR 34 merged as 72ef00f4e10509c86080ab2c0627e47e1748a6ca, tagged v1.0.681.
+Stable release 34763123495 passed all tests and Windows/Linux/macOS/Emscripten
+builds. All six GitHub packages were downloaded and verified. The CI Mac DMG
+reports 681, passes strict signature verification and includes both mods.
+SourceForge run 34764258867 verified all uploads, source branch/tag and three
+platform defaults. The exact stable-run browser artifact was packaged with
+production signaling; redundant browser rebuild 34764258860 was cancelled.
+
+Website 154366c84ad94fb1c39eb29f9ddc4a64595e7e2b publishes that package and the
+restored-map-browser guide. Deploy 34764315624, Web security 34764315629 and
+CodeQL 34764315627 passed. Live build.json reports 681/source 72ef00f; all seven
+artifact hashes match. Live payload verification confirms 769 Tornie entries,
+six Dune2R files and 38,455,774 data bytes. Signaling health is status=ok/protocol=1.
+The public browser opens the original map list; Online -> Players -> Create Lobby
+successfully creates a private lobby with the chosen Habbanya-Penny map, preview
+and invite code. Leaving that test lobby and Browse Maps retain the selection.
+The exact CI browser package also starts an offline Habbanya-Sammy custom game.
+
+Evidence: ../outputs/dunecity-menu-acceptance/live-681/verification.json,
+release-681-assets, sourceforge-681.log and ci-681-macos-verification.json.
+Different-network two-device multiplayer and multiplayer save/resume remain
+unverified in this release pass. No human game was interrupted or installed app
+replaced. The independent campaign work is proceeding as 1.0.682; it incorporates
+this fix and must preserve the map-browser guide when publishing its website.
+
+## 2026-09-14 — 1.0.680 validation complete; publication in progress
+
+71 native scenarios resolved naturally: 46 wins, 25 losses, no crash/timeout.
+All enemies attacked; all 21 advanced level-9 helpers reached 15 workers; zero
+over-cap cases (679 had eight). Seven CTest groups and eight real-engine
+behavioral fixtures pass. Browser build, bundled mods and 18 shell/packaging
+checks pass; actual level-9 launch and selection after feedback pass.
+See [680 validation](docs/campaign-ai-validation-680.md) for evidence and limits.
+PR #33 is undergoing release checks. No production completion claimed yet.
+
+## 1.0.679 published and verified — 14 September 2026 (Sydney)
+
+The missing browser mods fix and menu release are live. PR 31 merged as
+49d58edeb3e0710188305eb754c15843d856d21b, tagged v1.0.679. Stable release CI
+34760679530 passed version checks, relay/signaling tests, native tests and
+Windows/Linux/macOS/Emscripten builds. All six GitHub packages were downloaded
+and verified against their release metadata. The Mac DMG has version 1.0.679,
+a valid strict signature, both bundled mods and all 769 Tornie checksum files.
+
+SourceForge run 34761805560 verified every uploaded checksum, published
+`dunecity-v1.0.679`, advanced `dunecity` from b7db719 to 49d58ed and confirmed
+Windows/macOS/Linux defaults. The original v1.0.674 tag remains immutable and
+unpublished after cancellation; 679 supersedes it.
+
+To avoid an unnecessary browser rebuild, the successful stable run's exact
+DuneCity-Emscripten artifact was validated and packaged with production signaling
+origin https://dunelegacy.com. Automatic browser rebuild 34761805565 was cancelled
+before publication. Website commit d38c374 includes that package, matching private
+service SOURCE.json, 679 download references and the revised menu/co-op guide.
+Deploy to Droplet 34761923903 and Web security passed. Live build.json reports
+version 1.0.679 and source 49d58ed; all seven downloaded browser artifact hashes
+match. Live payload validation verifies 769 Tornie entries, six Dune2R files and
+38,455,774 data bytes. The public browser Mods screen visibly lists Dune City,
+Vanilla, Tornie and Dune2R. /p2p/v1/health reports status=ok, protocol=1.
+
+Local fresh and upgraded browser profiles both have all four mods. Tornie and
+Dune2R activation survive reload; Tornie custom reaches gameplay. Different-network
+two-device multiplayer and multiplayer save/resume remain unverified as previously
+disclosed and accepted by Stefan. No running human test game was interrupted or
+local installed application replaced. The local native build is 679; the separate
+running 673 guest copy was preserved.
+
+Verification artifacts are in ../outputs/dunecity-menu-acceptance: live-679/
+verification.json, release-679-assets, sourceforge-679.log, ctest-679.log and
+ci-679-macos-verification.json. This section supersedes the publication-pending
+statements in the historical entries below.
+
+## 2026-09-14 — Integrated campaign release candidate 1.0.680
+
+Merged main 49d58ed (menu navigation and reproducible browser/mod packaging)
+with the campaign AI changes. Worker planning now reserves pending refinery
+workers in every mode and only after a successful construction order. New
+refineries wait when paid/queued workers already fill the engine cap, until
+those workers arrive. This preserves paid deliveries and capacity expansion.
+Validation and publication are in progress; see the preceding 679 assessment
+for the eight over-cap scenarios being rerun.
+
+## 2026-09-14 — Native release assessment, local AI 1.0.679
+
+Tested clean source `552a59f`: 71 scenarios (59 matrix +12 other-house level-9
+cases), 48 wins/22 losses/one 60-minute cutoff. Same-binary extended replay of
+Ordos9 Brutal/Hard seed1 ended naturally in defeat at85.44 game minutes; all71
+scenarios therefore resolved, no crashes. All13 Easy/Easy won, all6 Medium/Medium
+won; every enemy attacked. All21 advanced-helper level9 cases reached >=15workers.
+Eight cases overshot to16: pending refinery-supplied workers are missing from
+vanilla AI commitment counts and can overlap factory/paid Starport arrivals.
+Fix planning, not paid delivery or existing units. Native checks/fixtures pass.
+Fetched main `49d58ed` has separate menu/browser changes ALSO numbered1.0.679;
+read-only merge assessment reports HANDOVER conflict only. Need worker fix,
+integration, new version and web validation before production. No code changes,
+merge or push this turn. Full evidence and ratios:
+[release assessment](docs/campaign-ai-release-readiness-679.md).
+
+## 2026-09-13 — Advanced helper economy, 1.0.679
+
+Stefan closed his level-9 game before inspection. Native reproduction found a
+15-worker-cap Brutal helper reducing its target to six with 41k map spice left.
+`83f6264` makes Hard/Brutal vanilla campaign helpers invest toward their allowed
+capacity without dividing spice equally with enemies; prioritizes their Starport
+and factory workers; fixes all-role double reservation of already-paid Starport
+cargo. Enemy worker limits and Easy/Medium investment unchanged. Native build,
+audits/signature, six CTest targets and final helper/Starport/pacing fixtures pass.
+Six complete level-9 matches all reached 15 workers at 10.64–11.65 game minutes;
+five defeats, one win show economy alone does not fix combat balance. Source,
+ratios, comparison and fixture caveats: [679 validation](docs/campaign-ai-validation-679.md).
+No push or deployment; browser unchanged. Readiness/ineffective routes remain open.
+
+## 2026-09-13 — Hard/Brutal campaign commitment, 1.0.678
+
+Stefan requested most-in Hard and all-in Brutal enemies. `063a7f5` implements
+80%/100% commitment without count/value caps for those tiers, retaining two/all
+simultaneous houses respectively. Easy/Medium and human-side helpers unchanged.
+Native build, audits, signature, six CTest targets and pressure/defense/pacing
+fixtures pass. Four 40-tank armies verify Hard sends 32 each from two houses,
+Brutal 40 each from all four; manual/repair/damage exclusions remain effective.
+Harness commit `4d77832` updates the old unconditional live cap assertion.
+Six final native level-5/8/9 matches (Hard helper, Hard/Brutal enemy, seed 42)
+completed: five player defeats, one victory (level 8 Hard), no timeouts. This is
+much stronger pressure, not a finished balance claim. See
+[678 validation](docs/campaign-ai-validation-678.md). No push/deployment; browser
+remains unchanged. Helper readiness and ineffective attack routes remain open.
+
+## 2026-09-13 — Native campaign resistance validation, 1.0.677
+
+Local branch `fix/campaign-ai-attack-limits`, game commit `0861fba`, diagnostic snapshot `a6c54ef`. Added Hard/Brutal repair-yard and prerequisite priority for both roles, removed the repair-yard attack prerequisite, retired army readiness goals after spice exhaustion, and gave idle dispatched campaign attackers real scouting/visible-base reacquisition. Human orders, home defenders and shared enemy wave limits remain protected.
+
+Final native matrix: 59 real matches, 49 player wins, 10 losses, no timeouts. Six CTest targets, dependency audit, signature and five native fixture invocations passed. Detailed ratios, checkpoints, reproduction and limitations: [campaign-ai-validation-677](docs/campaign-ai-validation-677.md). Two individual enemy no-damage spells remain; early difficulty overlap and inconsistent Brutal-helper performance mean this is not a claim of finished human balance. The browser remains on validated 672; 677 is committed/built locally only, with no push or deployment.
+
+## Campaign defensive reserve refinement — 1.0.672 local, 13 September 2026
+
+Stefan refined readiness: a level-4 Easy wave may be four 300-value units, so
+2,400 army value should permit four attackers and four defenders. Readiness is
+now min(legacy threshold, twice the shared wave value cap). Easy/Medium campaign
+enemy selection uses at most 50 percent army value, still within shared count/
+value caps, and does not use the depleted-army exception that could send its last
+unit. Hard/Brutal retain configured fractions and their previous exception.
+Zero configured attack fraction still disables dispatch. The 671 worker-limit
+fix and 670 Area Guard/defensive response fixes remain included.
+
+The actual eight-tank fixture passes: 2,399 is below readiness, 2,400 sends exactly
+four tanks, opening is respected, and repeated checks cannot top up the wave.
+The earlier 671 batch was interrupted on this refinement; do not describe its
+partial results as final-672 validation. The 671 web optimizer was also stopped.
+Final native defense/pressure/pacing fixtures pass, as do all six CTest targets,
+dependency audit and native signature verification. The clean-source `27f14ff`
+matrix completed 22 matches: 17 wins, four 60-minute time limits, one defeat.
+Easy/Easy levels 4,5,9 and Hard/Easy levels 8,9 won both seeds (1 and 42).
+Brutal/Hard levels 6 and 7 won both seeds; level 8 won seed 1 but timed out seed
+42; level 9 timed out both. Medium/Medium level 9 seed 42 won, Hard/Hard timed
+out, Brutal/Brutal lost. The reported Atreides level-4 settings reproduced in
+ordinary campaign won at 15.94 minutes; Easy bought no extra workers and sent
+four troops at 13.00 minutes. This is not a co-op transport reproduction.
+
+The late time limits expose an unchanged human-partner readiness problem:
+Brutal can wait for 16,000 army value after spice exhaustion (level 8 seed 42
+had 15,080 and no enemy combat army left), Hard for 8,000 (7,950 remaining in
+Hard/Hard level 9). These are not proof of healthy stalemates or human balance.
+See `docs/campaign-ai-validation-672.md` and the full evidence under
+`/tmp/dunecity-campaign-balance/672-validation`.
+
+Fresh visible browser Harkonnen level 4, seed 1701707512, Easy/Easy completed
+normally with victory briefing and score screen: 427 points, 16 minutes displayed.
+No Skip or player combat/economy commands; maximum speed 4. Ordos sent one
+four-unit/550-value wave at cycle 48,798 (13.01 minutes), recorded 24 defense
+responses and 44 retaliations, and never exceeded one harvester in snapshots.
+Last telemetry cycle is 59,270; do not call this the exact victory cycle (the
+score screen remains open, before final game-summary teardown). Browser tab 12
+is preserved on the score screen at `http://127.0.0.1:18766/play/`.
+
+The local web build uses Release C++ objects with link override
+`-O2 -sBINARYEN_EXTRA_PASSES=--no-stack-ir`; all seven served hashes match the
+672 manifest, packaging commit `63e166f` (docs only after game-source `27f14ff`).
+The stock O3 final StackIR pass was cancelled after over 30 wall minutes; an O1
+experiment crashed browser startup and was replaced. The O2 artifact opens in
+both Chrome and the in-app browser and completed the above mission. This does
+not validate the cancelled stock O3 artifact. Details are in the validation doc.
+No public push or deployment.
+
+## Campaign worker caps and small-wave readiness — 1.0.671 local, 13 September 2026
+
+Stefan reported excess enemy workers and no attacks in a closed match. Latest
+local telemetry was Atreides level 4 SCENA008.INI, seed 1237721204, co-op campaign,
+Medium partner/Easy Harkonnen enemy, harvester override 100. Harkonnen bought seven
+workers, had six remaining, and repeatedly deferred below a 4,600-value readiness
+threshold. The active native window/Brave tab no longer contained that match;
+Stefan confirmed he had closed it and requested both fixes regardless.
+
+Easy/Medium/Hard campaign enemy update now reconstructs the configured worker
+limit from initial refinery allowance and difficulty multiplier; the game-wide
+override can lower it but cannot raise it. Full human partners retain their
+separate economy development; Brutal keeps its broader economy policy. Existing
+excess workers are not deleted. Enemy readiness is capped at the shared sortie
+value allowance (level-4 Easy 1,200 rather than 4,600 in the reported example).
+Fair turn allocation uses the same threshold. Under-strength campaign enemies
+recheck in at most 15 game seconds. Opening grace, recovery, percentage selection
+and combined wave budgets remain enforced. Empty readiness checks no longer log
+fake zero-unit ground_hunt events.
+
+Native Release and six CTest targets pass. Real-engine `--pacing-probe --level 4`
+passes with override 100: enemy limits 2/4/4 for two initial refineries, override
+1 still lowers them, partner can exceed 2, and 1,500 army value can launch a
+budgeted Easy sortie below the former 4,600 threshold without bypassing opening
+or topping up an active wave. Evidence: `/tmp/dunecity-campaign-balance/pacing-671-v2`.
+Defense/pressure fixtures and full match matrix are being rerun. The 670 web
+build was cancelled in its optimizer after these additional user requests;
+671 full browser build is in progress. No public deployment or push.
+
+## Campaign defensive response — 1.0.670 local, 13 September 2026
+
+Browser testing of 669 exposed passive enemy defenders: GUARD uses the tank's
+short weapon range, while the seven-tile Easy/Medium base perimeter rejected
+nine-tile launcher attacks. Waiting campaign troops now use AREAGUARD. Direct
+hits trigger bounded retaliation independent of offensive opening/slots; bases
+and remote harvesters summon the existing threat-sized reinforcement response.
+Contact radii include the attacker's range plus two tiles. Self-defense uses the
+existing saved defense assignment and guard point as its pursuit anchor. Orders
+survive wave checks but expire when the target leaves that area. Repair retreats
+are preserved. Campaign activation no longer consumes the first human hit without
+also defending. UnitBase::isInWeaponRange now uses its argument instead of
+incorrectly dereferencing the unit's current target (which could be null).
+
+Real-engine `--defence-probe` passes for all four tiers: outranged tank response,
+base first hit (including ordinary human activation), remote worker rescue,
+orders surviving wave checks, bounded pursuit, Area Guard and repair retreat.
+Evidence: `/tmp/dunecity-campaign-balance/defence-670-v2`. The existing pressure,
+recovery, save/load and Windtrap probe passes at `pressure-670-v1`; all six CTest
+targets, native Release, dependency audit and signature verification pass.
+Browser build and corrected full-match matrix are in progress. No push/deploy.
+
+The pre-fix 669 batch won Easy/Easy levels 4,5,9 and Hard/Easy levels 8,9 on
+seeds 1 and 42. Medium/Medium level 9 seed 42 won; Hard/Hard lost; Brutal/Brutal
+reached 60 minutes with no player base/economy remaining, not a healthy stalemate.
+Brutal/Hard levels 6,7,8 won both seeds, level 9 won seed 42 and timed out seed 1.
+All sampled shared offensive budgets passed, but these outcomes are provisional
+because of the defense bug. Full artifacts are in `669-validation` and
+`669-brutal-hard-validation` under `/tmp/dunecity-campaign-balance`.
+The visible 669 Easy/Easy Harkonnen level 9 (seed 163683417) reached the ending
+cinematic after the last telemetry read at 24.61 game minutes. The user closed
+that browser tab before final score/summary capture; do not invent exact totals.
+## Browser bundled mods restored — 1.0.679, 13 September 2026
+
+Stefan reported that public browser 1.0.665 only listed Dune City and Vanilla.
+Emscripten preloaded data/config/sprites but omitted mods/Tornie and mods/Dune2R.
+Native packaging already included both. The pending 1.0.674 tag and duplicate
+main CI runs (34759208672, 34759197806) were force-cancelled before publication;
+GitHub latest remained 1.0.665. Keep the existing v1.0.674 tag immutable.
+
+Version 1.0.679 adds both managed mod payloads to browser preloads, excluding
+Dune2R optional downloadable art as native packaging does. Managed reseeding
+recreates the empty Dune2R asset directories omitted by file-only archives,
+preventing fallback to Vanilla on the next launch. Existing downloaded art is
+preserved. The build and production web workflows validate the actual JS/data
+archive for both mods and Tornie's SHA256 manifest. Six regression tests cover
+metadata forms (including minified exponent offsets), missing mods, corruption,
+truncated data and accidental art. The actual 679 archive verifies all 769
+Tornie checksum entries and six Dune2R files in 38,455,774 bytes.
+The check correctly rejects the previous CI 674 artifact for missing Tornie.
+Native Release, dependency audit and all seven CTest groups pass.
+
+Shipping authorization persists for 679, with the already disclosed WAN and
+multiplayer save/resume limits. Keep Stefan's running local 673 game untouched.
+Local browser acceptance passes on the existing 674 preview profile upgraded
+to 679: all four mods appear in Extras, Custom Game and Campaign. Tornie and
+Dune2R activate and remain active after individual reloads; an offline Tornie
+custom game reaches gameplay. Public publication must be verified separately.
+
+Stefan explicitly requested a GitHub administrator exception for ggtothemax.
+Ruleset 23003149 now permits User 325456832 in pull_request bypass mode; all
+other rules are preserved. Readback confirmed pull_requests_only. PR 30 merged
+with that exception after checks passed, producing 72bae344. Do not broaden the
+exception to other admins or direct pushes. The website copy is staged separately
+in dunelegacy-release-674 and must be updated for 679 before publication.
+
+## Release authorization — 1.0.674, 13 September 2026
+
+Stefan explicitly requested shipping after being told that different-network,
+two-device multiplayer and multiplayer save/resume remained unverified. Release
+1.0.674 with those limits recorded in releases/desktop/1.0.674.md. This authorizes
+normal stable-tag desktop, browser, website and SourceForge publication; keep the
+current local human co-op session running. Source is a fast-forward of public
+main b7db719. Publication outcome must be checked separately from local builds.
+
+## Classic player setup restored — 1.0.674 local, 13 September 2026
+
+Stefan rejected the sparse left-aligned player setup and requested the original
+custom-player UI for both Offline and Online. The classic centered roster/map
+composition, full player labels and dropdown widths (where space permits),
+wide-screen button margins, and optional Bonus palette selector are restored.
+The unified map/mod/connection/rules setup and 673 hosting validation remain;
+private/public visibility appears only online. Compact shared-house rows fit
+640 pixels. Simulation, saves and transport are unchanged.
+
+Native Release and all seven CTest groups pass; after the final narrow Bonus
+label adjustment, the menu probe passes again. It now asserts actual rendering
+at 640×480, 854×480 and 1280×720, including six-house Offline/Online, shared
+houses, campaign lobby and Tornie bonus colors. The test-only main bypasses
+SDL dummy desktop clamping, which otherwise silently reduced 1280 to 1024.
+The final web Release build and dependency audit also pass. Native/web 674
+artifacts are separate from the running 673 session. See docs/menu-acceptance.md.
+
+Stefan also personally hosted and started a private 673 Ordos campaign in the
+browser. Codex joined as MenuHost using the matching native client; both rosters
+were visible before Start, both entered the mission, and Stefan's unit movement
+and exploration appeared natively. Peer reports passed cycle 27,749 without a
+reported desync/disconnect in inspected diagnostics. This passes the human
+hosting/start check locally; it does not establish WAN or a completed campaign.
+
+IMPORTANT: Stefan is still playing. Keep browser tab 3, localhost:8769, the
+private service localhost:60458, and the running 673 Dune Menu Host test copy
+untouched. Do not close/reload the browser, replace its served play folder, stop
+the test client, or overwrite its executable/profile. The 674 build belongs in
+build/bin and a separate play-674 package; switch only after the current game.
+No install, push, PR or public deployment performed.
+
+## Hosting fixes — 1.0.673 local, 13 September 2026
+
+Create Campaign/Custom from Join Online now commits the entered name before
+building the roster. Custom online setup requires an explicit open guest slot;
+existing AI choices survive the Offline → Online switch. Admission progress no
+longer says Joined before receiving the host setup, and receipt/roster timestamps
+make the transition observable. The source-controlled web Release link uses -O2
+with O3 C++ compilation; the local linker override is cleared and normal native
+and web Release builds pass.
+
+All seven CTest groups and dependency/version/signature audits pass. Real 673
+native-host/browser-guest public campaign and browser-host/native-guest private
+custom games reached gameplay. Guest rosters were visible before Start; campaign
+receipt-to-roster took 20–25 ms on two joins, peer traffic passed cycle 12,374,
+and a browser infantry command appeared natively. Custom peer reports passed
+2,249. No reported desync in inspected diagnostics. The older browser waiting
+observation was not reproduced; do not invent a transport root cause or claim
+one was repaired. The suspected native keyboard trap was input-testing trouble;
+actual keyboard Start and a production-menu focus test pass.
+
+Stefan's crash screenshot was traced to temporary host PID 30706 rejected by
+macOS after replacing its executable without re-signing the copied app. Re-sign
+fixed it. A separate menu-probe crash was corrected test setup (network callback
+without a manager). Exact reports/evidence and scope: docs/menu-acceptance.md.
+The playable delivery app passes strict codesign verification. Applications still
+held 1.0.653; the 673 test candidate is build/bin/dunecity.app. No install, push or
+deployment performed. Human hosting / second-device or network check remains
+before release; no new saved-session, WAN, mobile or campaign-completion claim.
+
+## Menu acceptance — 1.0.672 local, 13 September 2026
+
+Stefan requested actual verification. Commit 2f440b5 fixes a live-discovered
+Home keyboard trap: hidden legacy buttons participated in Tab navigation.
+Only visible destinations now register in screen order, and initial focus is
+assigned after registration. The production-menu probe checks a complete cycle.
+Native Release, dependency/version/signature checks and all seven CTest groups
+pass. A live cycle with Continue visible also passed.
+
+Isolated native clients exercised all four core routes into actual gameplay:
+offline Campaign and Custom, private-code online Custom (670), and public
+Campaign co-op (672). Campaign retained Ordos/level 4 through cancellation and
+hosting and loaded SCENO008.INI. Real directory filters distinguished campaign
+from custom. Custom peer traffic reached cycle 11,999; campaign passed 2,600;
+neither inspected log reported desync. Offline save → Home → Continue resumed
+the mission. Online custom saves route into hosting lobbies in 670 and 672.
+Mods and Map Editor opened from Extras; unified Graphics was inspected.
+
+Exact evidence and scope are in `docs/menu-acceptance.md`, with logs and isolated
+profiles under `../outputs/dunecity-menu-acceptance`. The browser test build
+joined a fresh public native campaign, passed the start barrier, and ran to
+cycle 14,624 with no reported desync. A browser unit command appeared on the
+host. Browser Home/Join/Graphics/Audio mouse navigation passed. The browser
+initial lobby display remains open: it could show Join Online's waiting screen
+until the host started, despite the host recognizing the browser. Saved co-op
+admission was checked, but actual saved-session resumption is not claimed.
+
+Default web Release linking was stopped after over 20 minutes in Binaryen's
+local2Stack optimizer (12.2 GB sampled footprint). The successful browser test
+used existing Release objects with CMAKE_EXE_LINKER_FLAGS_RELEASE=-O2; default
+project flags are unchanged. This does not validate the default O3 web release.
+No WAN/mobile or completed-campaign claim. Nothing was pushed or deployed.
+Existing Game Rules/New Map keyboard dismissal remains a follow-up; native
+pointer automation was unreliable. The candidate is not fully signed off.
+
+## Menu navigation — 1.0.670 local, 13 September 2026
+
+Stefan approved implementing the menu review, including Mods and Map Editor in
+Extras. This candidate starts from campaign-controls commit 81ff90a (1.0.669).
+Home now goes directly to Campaign, Custom Game, Join Online, Load Game,
+Settings and Extras. Campaign has explicit Start, Offline/Online, full campaign
+or single mission; online hosting carries the selected setup into the lobby.
+Custom combines map/mod/connection/rules/player choices, preserving the roster
+when changing connection mode. Join Online has mode/mod filters, invitation
+codes, separate public chat, and secondary legacy LAN/direct connections.
+
+Graphics and interface controls share Settings > Graphics. Audio, Controls and
+Advanced are separate tabs. Unchanged legacy network fields no longer block
+unrelated settings changes. Setup rules persist globally only when requested.
+Continue detects eligible recent offline saves; Load Game routes by saved type.
+See `docs/menu-navigation.md` for the exact flow and remaining follow-ups.
+
+Native Release and dependency audits pass. All six existing CTest targets pass;
+the new real-menu probe verifies setup preservation, filters and settings
+validation, and renders at 640×480 and 854×480 with isolated profiles. Its images
+are in `build/menu-probe`. Small-screen player rows were corrected after visual
+inspection, including shared-house controls. The app is in `build/bin`.
+No public deployment, browser/mobile verification or live two-peer game test
+is claimed for this menu candidate.
+
+## Campaign difficulty implementation — 1.0.669 local, 13 September 2026
+
+Stefan authorized implementing the matrix. `CampaignDifficultyPolicy.h` and
+`QuantBotCampaign.cpp` now enforce alliance-wide campaign assaults. Easy/Medium
+allow one attacking house, Hard two, Brutal all. Combined troop caps scale by
+tech stage to 3–5 / 6–8 / 10–14 / 16–24 with simultaneous combat-value caps.
+There are post-wave recovery periods and no continual top-ups. Timed sorties
+withdraw survivors; authored HUNT arrivals wait outside an authorized wave.
+Defensive pursuit and air interception are bounded around owned bases and nearby
+harvesters. Offensive aircraft consume wave allowance. Easy/Medium share one
+base objective; Hard/Brutal split targets and use a lateral approach when usable.
+
+Easy/Medium campaign builders, including human-house partners and economy
+support, queue Windtraps for actual/committed/planned power demand. Default
+Vanilla power consequences are unchanged. Full campaign partners keep useful
+economy/Starport behavior and 25/15/10/5 percent home reserves, without enemy wave
+caps. Easy full partners can use the existing damage-triggered repair path.
+Campaign setup descriptions explain partner and enemy behavior.
+
+Save format 9838 adds QuantBot opening/launch/activity times, shared-front target
+and member IDs; pre-9838 saves initialize that state safely. The real-engine
+pressure fixture verifies slots at all tiers, combined count/value limits,
+no repeated-check top-ups, serialized bot state, legacy loading, held HUNT
+arrivals, sortie expiration/recovery, and actual Windtrap production for two
+enemy tiers plus the human partner. Four menu states rendered; Easy/Brutal
+screens inspected without clipping.
+
+Native Release, dependency/signature audits and all six CTest targets pass.
+Final-source level-9 runs (seed 486409243, no human commands or skip, continuous
+budget assertions) won: Easy/Easy at 89,669 cycles (23.91 game minutes), Hard/Hard
+at 108,599 cycles (28.96). Evidence under
+`/tmp/dunecity-campaign-balance/{pressure,easy9,hard-hard9}-669-verified`.
+Full Emscripten Release build passes. Local preview serves 669, game-source
+commit `81ff90afa4cda8f8acffe768f194d4ee205aee36`; all seven served artifact hashes
+match `play/build.json`. Browser tab 8 at `http://127.0.0.1:18766/play/` was opened
+fresh, displayed v1.0.669, and reached the updated campaign setup successfully.
+All four native menu descriptions were inspected without clipping. No public
+deployment or push was performed. Human accessibility and broad seed/house coverage are not yet
+established. See `docs/campaign-ai-difficulty-matrix.md` for exact values.
+
+## Campaign difficulty design matrix — 13 September 2026 (superseded by implementation above)
+
+`docs/campaign-ai-difficulty-matrix.md` records current and proposed behaviour
+for all four difficulties, separately for enemies and the full QuantBot sharing
+the human house. No balance implementation or deployment accompanies this doc.
+Stefan requests Easy/Medium enemies take turns attacking and build Windtraps to
+cover demand. Proposal adds combined assault budgets/recovery intervals; Hard
+may overlap two houses, Brutal all. Trial sizes/timings remain unvalidated.
+Vanilla general power is currently disabled for humans and AI alike; building
+Windtraps does not itself restore shortage consequences. Corrected prior audit:
+Easy has reactive on-hit evasion, but lacks proactive ranged spacing. Structure
+and RETREAT repairs mean Easy/Medium do not lack every repair path.
+
+## Campaign score attribution — 1.0.668 local, 13 September 2026
+
+Game-source commit `f3c5cd1` on `fix/campaign-ai-attack-limits` fixes
+`CampaignStatsMenu::calculateScore`: classify houses, surviving structures and
+loaded harvester spice by the local team's ID instead of `House::isAI()`. A
+human house shared with QuantBot sets that AI flag, so previous versions put its
+harvests/kills under Enemy, subtracted its destroyed value and omitted its cash
+and surviving-building score. The score formula itself and gameplay are unchanged.
+Human opponents stay on Enemy; AI allies count with the local team.
+
+`tests/ai/run-campaign-balance.py --level 9 --stats-probe --output-dir <new-dir>`
+instantiates the actual results menu against a real shared-house campaign. It
+checks ordinary-human versus AI-assisted score/rank parity, known kills and
+harvest totals including carried spice, an AI ally and a human enemy. Fixture
+screenshot verified: You 1,300 spice / 7 units / 3 buildings; Enemy 775 / 5 / 2;
+score 567, Warlord. These are controlled test totals, not a played mission.
+Evidence: `/tmp/dunecity-campaign-balance/stats-668-render-v2`. Native Release,
+dependency and signature audits and all six CTest targets pass. Full Emscripten
+build also passes; local preview packaging uses 668. The already-running 667
+browser tab requires a fresh load to pick up this results-screen fix.
+
+Stefan also asked why campaign difficulties look similar. Audit in
+`docs/campaign-ai-balance.md` distinguishes enemy and shared-house partner paths:
+enemy ground-HUNT budgets are 25/40/50/60%; initial attack delay and much planning
+are shared. Partner uses Custom growth and has no enemy wave cap; its configured
+harvester difficulty caps are overwritten by common dynamic map limits. Several
+legacy defender-count/aircraft-threshold knobs are loaded but unused. No further
+AI tuning was made. Public deployment remains 665; user's existing browser game
+uses 667 and has not been restarted.
+
+## Campaign economy and selection — 1.0.667 local candidate, 13 September 2026
+
+Branch `fix/campaign-ai-attack-limits` in the campaign-controls worktree. Building
+clicks now replace all previous building/unit selections, including Shift-click;
+Shift-clicking a unit also removes selected buildings. The real SDL command
+probe passes this regression on campaign levels 4 and 9.
+
+Needed Starport harvesters and the first carryall can now spend Vanilla's reserved
+economy cash. They already bypassed the cheap-price filter; the reserve was the
+actual barrier. Purchases check availability, stock, affordability and accepted
+queues, and stop at the sustainable worker target. A real Starport fixture bought
+a 1,500-credit carryall and 1,200-credit harvester with exactly 2,700 credits,
+placed the order and left zero credits. Other imports retain their existing rules.
+
+Stefan raised the balance target: Easy should survive level 9 against Easy,
+even if it cannot win. Four real-game simulations with a 60-minute cutoff all
+**won** using the existing 25% enemy attack budget: seeds 486409243 / 1 / 42 /
+257913089 finished in 31.95 / 30.60 / 29.81 / 26.59 game minutes. Hard also won
+seed 486409243 in 22.21 minutes. These runs used 667's combined economy/selection
+changes, with no human orders or skip. No further wave reduction is justified by
+these samples; other houses, map variants and human play remain untested.
+
+In the visible 666 browser campaign, Stefan explicitly confirmed the level-8
+victory screen and continuation (Hard partner / Easy enemies, seed 493337323).
+He subsequently closed the browser campaigns. Codex did not capture a final
+level-9 browser victory screen; native wins are recorded separately.
+
+Native Release, post-build dependency audit, signature verification, all six
+CTest targets, real SDL selection probe, above-price Starport probe and full
+Emscripten build pass. See `docs/campaign-ai-balance.md` for reproducible commands
+and evidence. Version 667 is local only; installed app and public 665 unchanged.
+
+## Campaign AI balance — 1.0.666 local candidate, 13 September 2026
+
+Worktree `/Users/stefan/Documents/projects/dunecity-campaign-controls`, branch
+`fix/campaign-ai-attack-limits`; original dev checkout remains untouched.
+Game-source commit `05979ae` implements campaign enemy ground-hunt budgets from
+existing QuantBot difficulty settings: Easy 25%, Medium 40%, Hard 50%, Brutal 60%.
+Already committed hunters consume the budget; deterministic selection preserves
+reserves. A lone cheapest unit may exceed an otherwise empty small-army budget.
+The full-control human partner remains uncapped. No save-format, economy,
+reinforcement, opening timer or skirmish changes.
+
+Stefan's acceptance target: Easy partner should win or hold through levels 4–5;
+Hard partner should beat Easy enemies on level 9. In two fixed-seed real-game
+simulation sets, Easy won levels 4/5 and Hard won level 9. The local browser
+level-4 Easy-versus-Easy run won in about 15 minutes. Its first enemy wave was
+8 units / 1,050 value, versus 31 / 4,360 in public 1.0.665. All six CTest targets,
+native Release and Emscripten builds pass. Native app signature and version 666
+were verified. `build/bin/dunecity.app` is rebuilt; installed app not replaced.
+
+See [campaign AI balance](docs/campaign-ai-balance.md) for measured outcomes,
+repeatable diagnostic commands, limitations and source-verified Dune Dynasty
+comparison. Dynasty gates team scripts on enemy contact and recruits small
+scenario-defined teams; its reinforcement schedule is separate. QuantBot still
+uses its existing 8–12 minute opening wait. Importing contact activation could
+start attacks sooner and is not part of the demonstrated size fix.
+
+**Release status:** 1.0.665 is merged and fully public (GitHub, SourceForge and
+browser), source `b7db7199455d9b756043118b7412c1d1e9359d06`. Browser artifacts were
+hash-verified. Website deployment `6042d82f9780e37474bbc7624e9b8f76ef817729` and
+anonymous feedback service are live; no server sudo/package install is needed.
+The Mac mini runner and caffeinate wrapper are restored; temporary Air builder
+label removed. Original branch protection restored after PR26 merge.
+**1.0.666 balance changes are committed locally, not pushed, merged, tagged or
+publicly deployed.** Earlier dated entries below describe historical states.
+
+## Campaign controls release integration — 13 September 2026
+
+Version 1.0.665 combines campaign controls, map-selection repair, AI partner choices
+and anonymous feedback with current main direct-P2P changes. Feedback targets
+`ggtothemax/dunecity` following repository transfer. The no-expiration token is
+restricted to this repository, Issues read/write and Metadata read-only. It is
+provisioned as the website Actions secret and server file outside the webroot.
+The dated local checkpoints below describe earlier states.
+Native Release build, dependency audits, all six CTest suites and the real-game
+command/input/feedback/AI partner probe pass for the combined source. Website
+feedback now follows the analytics service’s Python SQLite fallback when the PHP
+driver is absent; no administrator package installation is needed.
+
+# Campaign controls and feedback — 1.0.663 (local, 13 September 2026)
+
+## 2026-09-13 — 1.0.664 input repair and anonymous feedback (local)
+
+Worktree `/Users/stefan/Documents/projects/dunecity-campaign-controls`, branch
+`feature/campaign-controls`; original dev checkout remains untouched.
+
+- Fixed 1.0.663's selection regression: `BuilderList` returned handled for clicks
+  outside its bounds once a builder was selected. The new Game input guard then
+  discarded map clicks. Both left/right handlers now check bounds and visibility;
+  hidden generic buttons also let clicks through. Real SDL input tests select a
+  unit after a builder on campaign levels 4 and 9, alongside feedback open/close.
+- Moved **Give feedback** to the top bar, retained campaign skip at bottom right,
+  and let the news ticker shrink/clip within the available top-bar space.
+- Feedback sends asynchronously to `/metaserver/feedback.php`, includes the active
+  AI houses/types/difficulties, and displays **View request / OK** only after a
+  confirmed issue URL. Failure preserves the entered text and retry id. No player
+  GitHub account or credential in the game. Sending is bounded to 20 seconds;
+  the modal cannot be dismissed while sending. Browser opens only on View request.
+- Campaign AI partner selection has AI Support Easy/Medium/Hard/Brutal and full
+  QuantBot Easy/Medium/Hard/Brutal/Defend. Descriptions distinguish economy/building
+  assistance from full unit control. Existing QuantBot shared-human-house behavior
+  already permits full campaign control; no simulation/save schema changed.
+- Server counterpart is the isolated website worktree
+  `/Users/stefan/Documents/projects/dunelegacy-feedback`, branch `feature/game-feedback`.
+  See its `docs/game-feedback.md`. Fixed repo, server-only Issues-scoped token,
+  input/rate limits, SQLite idempotency, and lost-response reconciliation. Mocked
+  PHP tests create no real GitHub issues. **Not deployed.** Website Actions secret
+  `FEEDBACK_GITHUB_TOKEN` was absent when checked; it must be provisioned before
+  live submission. No broad local account token was copied to the service.
+- Validation: native Release build; all six CTest targets (683 main cases passed,
+  three expected skips); expanded real-game probe with input, AI context, retry
+  and success states; standalone Emscripten compile of the browser feedback client;
+  rendered dialog/top-bar/campaign layout checks. No full browser build or live
+  GitHub issue creation was performed. Local app is `build/bin/dunecity.app`.
+  No install, running-game restart, push, tag, PR or public release was performed.
+
+
+Implemented on `feature/campaign-controls` in
+`/Users/stefan/Documents/projects/dunecity-campaign-controls`, based on main
+`b4d1471` (1.0.662). The older `dunecity` checkout/branch was left intact.
+
+The opening menu now starts with Play Campaign and Play Other Modes. Campaign
+remains accessible through Single Player. Both use the same campaign setup.
+The house screen fits the 640x480 logical interface and adds Start from level
+(1–9), Campaign mod with its metadata description, help text and Back. Levels
+map to first scenarios 1, 2, 5, 8, 11, 14, 17, 20, 22. New settings retain the
+Campaign game type, mod identity and normal save/progression behavior. Changing
+mods activates its assets, available houses and effective game options; failed
+activation restores the previous selection.
+
+The lower-right playfield, beside the sidebar, has Give feedback on features
+or issues and a campaign-only Skip mission button. This placement keeps full
+build lists available at minimum resolution. UI mouse events are consumed so
+these buttons cannot also place buildings or issue map orders. Skip is appended
+to the command enum without renumbering existing commands. Only human controllers
+of the campaign house can execute it, including shared-house co-op. It calls the
+normal victory path; replay viewing cannot issue new skips.
+
+Stefan chose a prefilled GitHub issue using the player's account. Feedback has
+summary/multiline text fields, Unicode editing and paste, a visible game-context
+preview, validation and URL encoding. Open GitHub targets VR48/dunecity and leaves
+text available in the dialog. Players finish submission on GitHub; there is no
+anonymous endpoint, embedded credential or automatic issue submission. Empty
+labels avoid gettext's empty-string catalog metadata entry.
+
+Validation: native Release build, pre/post Ninja dependency audits, signature
+verification and version checks pass. CTest: all six targets pass (main suite
+683 passed, 3 expected skips; 9,752,032 assertions). Extended real-game command
+probe passes ordinary/final co-op mission victory/continuation, invalid issuer
+and malformed skip rejection, non-campaign rejection, actual feedback button
+opening, multiline/Unicode/select-all editing, plus previous ownership/batch/
+relay-pause checks. Feedback window rendered and visually checked. Native UI
+keyboard navigation verified the opening shortcut and level 4 with Dune City,
+Atreides, SCENA008.INI and city simulation active, at 640x480 logical resolution.
+CUA synthetic mouse clicks were unreliable even for pre-existing menu buttons;
+the new feedback button was additionally checked through its real GUI handler.
+No GitHub issue was posted during validation. Browser builds and live crossplay
+were not rerun for these UI changes.
+
+Local app: `build/bin/dunecity.app`. Test profiles and artifacts are under
+`/tmp/dunecity-campaign-*`; normal user settings were not touched. No push,
+release tag, installed-app replacement or website publication was performed.
+
+## Direct P2P branch checkpoint — 13 September 2026
+
+Branch `feat/p2pkit-direct-crossplay` is under test; the game is **not released**.
+Stable remains 1.0.661. The companion Apache/PHP service is deployed and verified.
+The branch vendors P2PKit commit `94ae7eb8818a629478e0a6ba0aa3232c5fc0b1ab` RTCTransport and
+framing, with direct-only bounds. Browser gameplay uses those actual modules; native crossplay
+uses pinned libdatachannel `443f6934d9007eb7076ab7825ba330f355fcbead` with compatible framing.
+Apache/PHP only serves admission, public lobby/chat and SDP/ICE introductions. No TURN or
+in-game forwarding/relay. Existing native ENet remains available.
+
+Opus supplied the initial implementation and part of the review corrections. Stefan explicitly
+asked Codex to **stop using Opus** on 13 September; do not resume its sessions for this task.
+Codex completed the remaining fixes and owns coding/testing. Hermes has supplied independent
+security findings; its third fixed-snapshot review finished without production approval.
+Report: `../outputs/network-hardening/p2p-hermes-review3.txt`. Codex addressed and tested
+its start-barrier/send-boundary, duplicate START and session lifecycle findings below;
+Hermes has not reviewed those subsequent fixes.
+Do not restart Opus or run further broad Hermes review rounds by default.
+
+Current checks: six native CTest suites and 164 PHP HTTP/concurrency tests pass.
+RTC and bridge tests cover synchronous send failure, bounded queue order and later failure.
+The real three-client session fixture passes the prepare/ACK/commit handshake and exchanges
+262128-byte ordered payloads for 75 seconds with all PHP workers stopped.
+Hermes review3 findings are addressed by an authoritative roster CAS, host/guest start barrier,
+one-shot START callbacks, bounded admission retry recovery and best-effort leave with host expiry.
+The real fixture also caught a missing admitted-peer role assignment; it is fixed.
+The direct host menu now registers the asynchronous countdown callback as well as guests.
+
+Normal Release/O3 browser linking restored successful fresh main-menu startup after the temporary
+-O1 build crashed. Do not use the temporary -O1 linker override.
+Two actual browser clients played with movement and construction after every local PHP
+worker was stopped: 23 matching simulation digests per client, zero mismatches.
+Evidence: `../outputs/network-hardening/p2p-browser-outage-acceptance.json`.
+Public browser/native play subsequently passed 417 matching digests through cycle 83400,
+with a connected RTC channel and browser construction observed. This is same-Mac testing,
+not proof of connectivity across different Internet NATs. Two fresh production-signaling
+browser clients joined publicly as alice/bob, deployed both MCVs and moved a tank while
+signaling requests were blocked in both test tabs. All 79 captured simulation digests per
+client matched, through cycle 23000. Evidence: `../outputs/network-hardening/p2p-public-game-acceptance.json`.
+The isolated browser-only test tabs were closed; browser/native gameplay was left running.
+Final platform builds remain pending. CI cancellations reported repository transfer to
+`ggtothemax/dunecity`; the restarted candidate run is 34734606729.
+The Linux relay supervisor fixture now handles ESRCH while reading a disappearing procfs file.
+Repeated successful match-phase requests no longer produce duplicate started analytics events;
+the 164-test PHP suite verifies idempotent start logging.
+Background directory refresh no longer disables the public list/join button and steals
+keyboard focus. Native keyboard joining now works during an in-flight directory refresh.
+
+The website companion branch `feat/p2p-signaling-web` in `../dunelegacy-p2p` adds private PHP
+service installation and additive schema-3 direct-P2P lifecycle logging. Migration tests preserve
+schema-1/2 records and legacy matches. Website PR #5 merged at ff3ec4f; deployment
+34733529907 succeeded. Public health and origin rejection pass; SQLite records both browser
+and native admissions as direct-p2p/signaling_service_v1, retaining old records and integrity.
+Private service/config/state remain outside the webroot. A pre-migration SQLite backup is
+in the deployment account's deployment-backups directory. Stable relay clients are unchanged.
+See `docs/direct-play.md`, `tools/p2p-signaling/README.md` and `tools/p2p-session-smoke/README.md`.
+
+## Public HTTPS polling acceptance — 13 September 2026
+
+**1.0.661 is published on the normal website and desktop release channels.** Source
+and stable tag are 43ec1dc. Candidate CI 34707717946 and stable run 34708449665 passed.
+All six published GitHub packages match their API checksums. SourceForge run
+34708945092 passed all uploaded checksums and verified Windows/macOS/Linux defaults;
+an independent HTTPS git read confirms its source branch and tag point to 43ec1dc.
+Browser publication 34708945094 and website deployment 34709214712 succeeded at
+website commit 8f348f4. The live `/play/build.json` identifies 1.0.661 / 43ec1dc;
+all six browser asset hashes, relay origins, CSP and WASM MIME type were checked.
+Fresh production UI startup displayed 1.0.661 and opened the online lobby without
+the previous crash. Relay health remained OK with zero rooms/connections after
+deployment. Evidence: `../outputs/network-hardening/public-661-deployed-hashes.json`
+and `../outputs/network-hardening/release-661-github-verification.json`.
+
+Public 1.0.659 matches overflowed the polling queue (close 4431). 1.0.660 at 52ac12e
+paces relay command history every 100 ms with a retention guard and removes two
+redundant browser waits. Public browser/native and browser/browser matches then ran
+approximately 22 and 19 minutes and ended intentionally, but simulation advanced
+only about 37–42 cycles/s against 62.5 configured despite 60Hz browser RAF callbacks
+(these callbacks are not direct SDL render-frame instrumentation).
+
+Actual Claude Opus implemented a bounded startup allowance; Codex narrowed it to
+HTTP polling, preserving ENet/WSS sizing and CommandValidation's existing bounds.
+1.0.661 budgets 700–1120 ms, capped at 70 cycles, fixed for the match. It requests a
+heartbeat at join and has a fallback before an answer arrives. More allowance adds
+input delay; arbitrary jitter/asymmetry and faster game settings can still stall
+lockstep. This is a bounded improvement, not elimination of network latency.
+
+Actual Hermes and Opus found no code/security blocker in the final narrowed source.
+Native CTest 6/6, dependency audits, generated-fetch regression and wasm32 network
+wire 80 checks pass. Public crossplay ran over ten minutes and browser/browser over
+seven, with movement, MCV deployment and Windtrap construction. Final retained digest
+samples matched (148 crossplay and 124 per browser client), with no captured premature
+close. Hosts exited normally and health returned to zero rooms/connections. Twenty-
+second RAF captures averaged 16.66 ms; simulation was roughly 56–57 cycles/s. These
+samples do not prove complete determinism or performance on every connection.
+Evidence: `../outputs/network-hardening/public-661-evidence.json` and
+`../outputs/network-hardening/poll-latency-review/`.
+
+The website's scheduled download-count deployment removed the previously manual
+relay gateway during test startup. Website main now includes the companion gateway
+and analytics source at 9a85d48; deployment 34707911135, web security 34707911134 and
+analytics compatibility 34707911193 passed. Relay health recovered and both actual
+matches ran through this tracked gateway. Keep these files in website main: routine
+rsync --delete removes anything merely uploaded to the webroot. Preview directories
+also disappear on website deploy, so restore a preview only after that deploy ends.
+
+The existing server now runs the restricted-account Apache/PHP HTTPS gateway at
+`https://dunelegacy.com/relay`, with Node bound only to loopback. Deployment revision
+10cd89f has v2 artifact manifests, release pinning and a single supervised child with
+cron recovery and kernel parent-death protection. Actual Hermes rechecked and cleared
+the two deployment findings (release-switch execution race and missing root-directory
+permission checks). 38 manifest checks, 42 supervisor checks and the release-pinning
+fixture pass on the server. Actual hung-child recovery took 80 seconds; killing the
+supervisor recovered through cron in 70 seconds. No administrator access was used.
+
+Actual public transport harnesses exchanged 17 matching digests each with no mismatch;
+this proves transport only, and the later actual-game failure above supersedes any
+readiness inference. SQLite schema-2 migration preserved the backed-up legacy rows;
+signed relay lifecycle records arrived over local HTTPS. External event submissions
+return 403. Bounded concurrent gateway requests and a short-body timeout test passed.
+The limited test was not a capacity or DDoS certification.
+
+## Crossplay candidate — 12 September 2026
+
+Final candidate CI `34694065319` is successful on Windows, macOS and Linux, with
+all six packages downloaded under `../outputs/network-hardening/release-657-artifacts-b4c6af3/`.
+Actual Hermes's final installer recheck (`20260912_124943_2a850b`) clears the six
+previous findings for bundle source `c1bd25e`. The archive is staged outside the live
+website under `/home/dunelegacy-deploy/relay-deployment-c1bd25e/`; its checksum was
+read back and verified. Operator instructions: `../outputs/network-hardening/relay-administrator-handoff.md`.
+Administrator access and actual public WSS/proxy/SQLite verification are still required.
+
+Branch `fix/network-hardening` is published for candidate packaging as
+`release-1.0.657`; current main `8879732` is incorporated. Production main and the
+stable tag are deliberately not advanced: the restricted metaserver SSH account
+cannot install services/Apache configuration and no administrator access is known.
+The configured production crossplay endpoint is `https://dunelegacy.com/relay`.
+
+Native 5/5 CTest, 185 relay tests, 173 wasm32 wire checks, secure-WebSocket feature
+checks and browser package policy/hash checks pass. Forced libcurl partial-write
+fixture passes. Actual Claude and Hermes findings and scope are recorded in
+`docs/crossplay-final-review.md`. Opus implemented the administrator bootstrap
+hardening; Codex reviewed it and ran its 53 isolated helper checks. Public TLS/WSS,
+proxy behavior and signed SQLite delivery still need on-host verification.
+
+Stefan joined a browser-hosted match from the native app through the public list.
+Actual browser/native digest samples agree through cycle 40,600, including a browser
+menu interval; these are samples, not proof of complete determinism. Current running
+clients predate the latest lobby presentation changes. The public join button is now
+full-width immediately below the game list; private joining says “Join with invite
+code”. These changes are committed and built for preview separately from the match.
+
+The initial test-app launch failure was macOS CODESIGNING/Invalid Signature after
+copying a binary; its bundle was re-signed. A pre-existing native test process survived
+SIGTERM and remained on its earlier executable. Do not mistake copying a binary or a
+new launch command for replacement of that process. Avoid interrupting Stefan's match.
+
+# Browser match logging — 1.0.655
+
+Extends the Play Online display hotfix below. Both start/end summaries carry an
+optional schema-3 client_runtime (browser/native). Emscripten bypasses the native
+MetaServerClient SDL thread, which is unavailable without pthreads, and queues
+same-origin POSTs through the shell with two bounded attempts. Form payloads
+avoid GET length limits; small requests use keepalive. Game code never waits on
+analytics. Tab close/crash can still leave a start-only match.
+
+Metaserver commit e02d40d adds client_runtime to analytics_matches in both PHP/PDO
+and Python backends. Legacy/missing/invalid values default to unknown; missing
+later values preserve known runtimes. No historical classification is invented.
+Deployment 34673787973 and compatibility CI 34673787975 passed. Live health
+migrated 1220 existing matches as unknown. SQLite backup before migration:
+/tmp/dunecity-runtime-655/live-before.sqlite on metaserver. Query details and
+compatibility tests are in the website repo's metaserver/ANALYTICS.md.
+
+Local Emscripten and native Release builds passed; dependency audits and CTest
+passed (588 passed, 3 expected skips). Actual Chrome skirmish start and quit
+produced matching start/end IDs, client_runtime=browser, version 1.0.655, and
+abandoned outcome (649/2602-byte summaries), captured at
+/tmp/dunecity-analytics-events.jsonl. Shell tests cover ordered POST/retry/offline
+behaviour. The packager now handles Emscripten's unquoted minified HTML attributes;
+a regression test verifies all three asset references receive the build token.
+Published website commit d2aebcd; deployment 34673987445 and browser security
+check 34673987519 succeeded. Live manifest and all six SHA256s match game source
+7124425. Production Chrome loaded 1280x720 with all five asset URLs sharing
+?v=1.0.655-2c0245d2a43c. An actual live skirmish generated HTTP 200 OK for start/end
+of m1-65b41f2ce0dc0-73d992ca-65b41f2ce0dc0; production SQLite confirms browser,
+1.0.655, skirmish, abandoned, timestamps and both JSON records. All 1220 historic
+match rows match the pre-migration snapshot byte-for-value on original columns.
+The brief abandoned smoke-test row remains identifiable by that match ID.
+Installed desktop remains 1.0.653; no new desktop release tag was published.
+The desktop CI jobs triggered by the main push are separate from the verified
+local native build and published browser package.
+
+# Play Online display fixes — 1.0.654
+
+Browser hotfix based on the latest released 1.0.653 gameplay. Removed the web
+640x480 reset and SDL_WINDOW_RESIZABLE (SDL otherwise substitutes the CSS size
+for the requested backing buffer). The shell fits the actual canvas ratio into
+the stage. Display exposes working 4:3/16:9 controls; Options offers 19 backing
+resolutions through 3840x2160, plus the saved custom size. Desktop default is
+1280x720, rising to 1600x900/1920x1080 when the stage fits; small touch screens
+start at 854x480. A one-time browser config marker migrates old forced VGA while
+preserving subsequent deliberate VGA selections and other saved resolutions.
+
+Emscripten 4.0.14 package built locally in /tmp/dunecity-web-build. Chrome tests
+verified actual backing sizes, both aspect buttons with Automatic selected,
+1920x1080 through the Options dropdown, reload persistence, browser resize and
+fullscreen, old-VGA migration, explicit-VGA preservation and fresh touch default.
+Native Release build/dependency audits passed; CTest: 588 passed, 3 expected skips.
+Three initial Node shell tests cover defaults, aspect fitting and common asset versioning.
+Local app rebuilt in build/bin; installed /Applications app left as 1.0.653.
+
+Shared Python packager (also called from PowerShell) records source commit and
+SHA256s, versions shell/WASM/data URLs together, and includes web/.htaccess.
+Publish browser build follows successful stable desktop releases and refuses a
+downgrade; see docs/release-operations.md. This workflow is configured for future
+releases; local browser hotfix publication is verified separately below. Browser
+multiplayer remains unavailable. The existing reports/ directory is unrelated.
+
+# Public co-op release published — 1.0.653
+
+Release version bump only over the user-tested 1.0.652 gameplay. Includes all
+unreleased fixes since 1.0.642 plus campaign/skirmish shared-house co-op.
+Release notes are releases/desktop/1.0.653.md. Local Release build and before/after
+Ninja dependency audits passed; CTest reports 588 passed and 3 expected skips.
+Installed /Applications/dunecity.app, SHA256
+9647fa6549b42527dfb7dc42251d5c94683cbb4134d484d4903adb14cd2344e9.
+Backup: /Applications/.dunecity-653-fvc2i619/dunecity-previous.app.
+Published and verified on 2026-09-12. GitHub tag v1.0.653 points to eaaff4a753d00fe2916c1d8f9c951ae2193cd54d.
+Build Dune Legacy run 34672540279 passed Windows, macOS (Mac mini), Linux,
+Linux tests and release publication. All six packages are present in the stable release:
+https://github.com/VR48/dunecity/releases/tag/v1.0.653.
+SourceForge run 34673037345 succeeded: six packages plus notes/checksums were
+read back and hash-verified; all three OS defaults now select 1.0.653.
+SourceForge dunecity branch and peeled dunecity-v1.0.653 tag match eaaff4a.
+Website commit dcfec4a / Deploy to Droplet run 34673168756 succeeded; live home,
+Dune City, co-op guide, modding and sitemap match the published source. Co-op is
+announced as available and all desktop download links point to 1.0.653.
+Legacy SourceForge master commit 591b9e1 adds co-op hosting guidance. The changed
+downloads.html was backed up, uploaded atomically, read back and byte-verified
+against both the source and public page. Original user profile remains untouched.
+Concurrent uncommitted 1.0.654 browser work and reports/ are outside this release.
+
+# Internet-listed co-op smoke test — 2026-09-12
+
+Tested installed 1.0.652 using two independent local app bundles, profiles and
+ports (29851/29853). Host Campaign Co-op registered successfully with the live
+metaserver; its list2 response and the guest's Internet Games UI both contained
+the lobby. Guest joined from that listing, passed mod/config verification, and
+both human controllers entered Ordos mission SCENO001.INI. Before save/reload,
+337 valve-debug and 42 daily CitySim rows had identical shared prefixes, with
+no desync logged. During Stefan's interaction, the guest rehosted a campaign
+save and the original host joined through Internet Games; both completed all
+save-load stages and resumed the shared game with reversed network roles.
+
+Same-NAT detection selected the local address for game packets. This verifies
+real Internet discovery plus local co-op joining/play/save hosting, not a
+connection across separate routers. UPnP discovery found no usable IGD; STUN
+and metaserver registration succeeded. The second local instance could not
+bind the shared LAN discovery port and retried every five seconds, but Internet
+listing/joining worked independently. Toggle buttons require Space rather than
+Return for keyboard activation (Button::handleKeyPress).
+
+Evidence snapshots: /tmp/internet-test-dunecity-internet-host.log and
+/tmp/internet-test-dunecity-internet-guest-local.log. Live profiles are
+/tmp/dunecity-internet-host and /tmp/dunecity-internet-guest-local; test apps
+DuneInternetHost.app and DuneInternetGuestLocal.app remain open for Stefan.
+Stefan subsequently confirmed testing two campaign missions and save/reload.
+Final logs show both clients load SCENO002 after the shared save, and shut down
+normally. After save/reload, 230 comparable CitySim valve/day records match;
+after mission transition, 101 comparable records match. The first mission's
+379 pre-load records also match. DESYNC DEBUG entries are routine diagnostics,
+not reported desynchronizations. Final evidence snapshots use the prefix
+/tmp/internet-test-final-dunecity-internet-*.log. Both test apps are now closed.
+
+Published website guide https://dunelegacy.com/coop.html with a Multiplayer
+Co-op navigation tab and home/DuneCity announcements (website commit 964ac35,
+Deploy to Droplet run 34671938595 successful; six live files byte-verified).
+Home link reads "Play campaign co-op with your friends online!" per Stefan.
+Guide covers hosting, joining, QuantBot partners, skirmish and solo/shared saves.
+At that checkpoint public desktop downloads were still 1.0.642. The 1.0.653
+release above supersedes that pending state and updates the guide/download links.
+
+The Mac mini guest was stopped after switching to the requested local test.
+Its portable bundle needed SDL3 explicitly included beside SDL2: Homebrew's
+sdl2-compat loads SDL3 dynamically, so otool dependency traversal alone misses
+it. No game source, installed app, normal profile, or remote release changed.
+
+# Campaign and mission shared-house co-op — 1.0.652 (local)
+
+Campaign house selection and single-mission/skirmish setup have Host Co-op.
+Multiplayer has Create LAN Game, Host Internet Custom Game, Host Campaign Co-op.
+The campaign setup chooses house and mission (1–22), Internet or LAN only,
+or loads a solo campaign save (save/) or shared campaign save (mpsave/).
+The fixed-house lobby exposes exactly two controllers: primary human plus
+another human or QuantBot (Easy/Medium/Hard/Brutal/Defend; support variants also
+available). Existing server listing, connection, mod/config synchronization
+and countdown machinery is used. Scenario enemy identities/teams are preserved.
+
+Campaign continuation preserves both controllers and campaign progress, with
+host-selected next scenario/seed sent reliably to the client. Old simulation
+packets are rejected using their mission seed; callbacks are cleared before
+replacing Game. Initial shared missions skip the blocking solo briefing.
+Save loading distinguishes the original solo/network binary layout before
+converting to co-op, including the outer mod header and saved house colors.
+Existing matching partner state is retained; new partners initialize only
+after all saved objects exist. New controller setup also preserves planned
+future campaign enemy slots not present in the current save.
+
+Stefan observed an inactive QuantBot partner after advancing an early mission.
+The partner was present, but Campaign mode only rebuilt initial scenario
+buildings: a human starting with only a construction yard had no windtrap
+baseline. QuantBot now detects an actual HumanPlayer sharing its house and
+uses Custom/normal economic and military planning at the selected difficulty,
+while still obeying mission tech/build availability. Campaign enemies retain
+campaign behavior. This also migrates saved partners on their first update.
+Fresh QuantBot initialMilitaryValue=-1 is a serialized pending-init sentinel:
+new midgame partners no longer skip initialization because cycle!=0 or read
+uninitialized initialItemCount. Existing initialized bots keep saved baselines.
+
+Save format is 9837 and network protocol 5. Both network clients need 1.0.652;
+older saves remain readable, older executables reject new saves. POSIX
+DUNECITY_USERDIR optionally selects an absolute isolated profile; ordinary
+user paths are unchanged. Tests used separate app IDs, profiles and ports.
+
+Validation: dependency audits before/after Release build, ctest (588 passed,
+3 expected skips), version/whitespace checks, app signature and binary hash.
+New tests exercise shared controller/settings/scenario round trips, human and
+bot next-mission retention, old save headers/colors, malformed headers, and
+preservation of absent future enemy slots when hosting a save.
+Two separate localhost clients joined Atreides, ran in lockstep (462 CitySim
+valve rows and 57 day rows had identical shared prefixes), and saved a shared
+campaign. A separate test loaded that save with a new QuantBot Easy partner
+at tech1/cycle15747; correct initial counts and Custom mode were logged.
+Accepted construction began Windtrap, Residential, Industrial, Refinery,
+then further economy/power construction. Stefan also confirmed it worked.
+Evidence: /tmp/coop-two-client-host.log, /tmp/coop-two-client-guest.log;
+/tmp/dunecity-coop-economy-verify/ai-decisions/1789179844509552-0/events.jsonl.
+No live two-machine Internet test or complete two-human campaign transition;
+next-mission settings are covered by tests and the bot transition was observed
+in Stefan's test. Original user profile/logs were not overwritten.
+
+Installed /Applications/dunecity.app, SHA256 4265200d009b95f97957b823b513282f4dcafc540a4a62a3d982cc99b3f885b6.
+Previous app: /Applications/.dunecity-652-fyt_4fmo/dunecity-previous.app.
+No remote deployment. Existing reports/ remains unstaged.
+
+# Original single-mission house identities — 1.0.651 (local)
+
+Current session1789170044652756-0 loads SCENA022.INI as GameType::Skirmish.
+Its loose data/scena022.ini is a Tornie import (5a172ce) that changes original
+Harkonnen -> Ordos, Sardaukar -> Harkonnen, Ordos -> Mercenary. House IDs were
+instantiated correctly from that wrong source. Campaign already used
+openCampaignFile; the single-mission picker bypassed it outside Tornie.
+
+INIMap now routes both Campaign and Skirmish through openCampaignFile. Original
+A/H/O scenarios resolve from SCENARIO.PAK; Tornie retains its campaign resolver.
+Custom games/multiplayer still use their supplied map data. No hardcoded house
+swaps or save-format changes. Original SCENA022 has Harkonnen left, Sardaukar
+middle, Ordos right (the user's remembered left/right order was reversed).
+Verified original units, structures, teams and reinforcements consistently
+reference those houses; Mercenary absent. Existing saves retain old identities;
+a newly started mission in the new executable gets the fix.
+
+Release build, full ctest suite, before/after Ninja dependency checks, version
+and whitespace checks passed. No fresh interactive mission run; current game
+and logs preserved. Installed /Applications/dunecity.app SHA256 c5cb7207a0fecf98d1e41d1d8cb0a020437ef32c2a747d5b0664f4a673d847e1.
+Previous650: /Applications/.dunecity-651-691z6krw/dunecity-previous.app.
+No remote deployment; existing reports/ remains unstaged.
+
+# Main-base proximity for MCV expansion — 1.0.650 (local)
+
+Stefan reported MCVs passing nearby rock and explicitly requires distance to
+main base to rank first. Current648 session1789167702882520-0, Ergsun-Fwiffo
+seed740015832: Harkonnen MCV243 at cycle50750 selected47,72 via105 route tiles;
+MCV257 at52350 selected124,107 via211 tiles. Previous policy maximized enemy
+clearance, then room, and only finally MCV travel distance, causing long detours.
+
+Eligible rock now ranks by Manhattan map distance from the oldest surviving
+active construction yard first. Enemy clearance, local room and MCV route
+length only break ties. No weighted safety detour overrides base distance.
+Actual MCV-ground BFS remains a separate reachability filter; own occupied and
+reserved formations, unsafe tiles, <48 free/local tiles and <12 enemy clearance
+remain excluded. The original yard anchors expansion until destroyed, then the
+oldest surviving yard replaces it; no averaged multi-base centre. First-yard
+legacy placement unchanged. Telemetry v67 includes main-base anchor, distance,
+route length and nearest-main-base selection reason. Save format unchanged.
+
+Validation: 583 tests passed, 3 skipped; dependency audits, version/whitespace
+checks and app signature/hash verification passed. Tests cover near small vs
+far large islands, unnecessary enemy-clearance detours, actual threats,
+unreachable/reserved rock and an MCV already beside the far island. No fresh
+full-match verification. Current game/orders were not modified in memory.
+Installed /Applications/dunecity.app SHA256 e4f33bd7442e18cb5d9de544398a263957acfb15f5aee99c0d4e6a72debd9723.
+Previous649: /Applications/.dunecity-650-ne1awl99/dunecity-previous.app.
+No remote deployment. Existing reports/ remains unstaged.
+
+# Wider lobby AI selectors — 1.0.649 (local)
+
+Both custom lobby player dropdowns widened from100 to180 logical pixels,
+including their expanded lists, to fit QuantBot and support AI names.
+Release build and before/after Ninja dependency audits passed; whitespace and
+strict signature/hash verification passed. No new tests for this layout-only
+change; no interactive visual run. Current app was not interrupted.
+Installed /Applications/dunecity.app SHA256 aff77514e5f64c43ce28fdafa93b5d7ea3dcea0e04ab05826f84d597baa68d4c.
+Previous648: /Applications/.dunecity-649-qxc4o3tw/dunecity-previous.app.
+No remote changes.
+
+# Ornithopter capacity, safe defence and AI defaults — 1.0.648 (local)
+
+Current 647 session 1789142209744263-0 (Ergsun-Prometh, seed1050788573),
+Sardaukar house4: High Tech completed cycle56346 at89,37 and IX cycle63946
+at80,1. Both remained at400/400 health at cycle140646. At cycle161546,
+Sardaukar had ~51.8k credits but army79950/80000 and air deficit569 at a
+600-credit ornithopter price. This observation does not justify forced extra
+factories at the cap. Source did reveal extra air capacity was behind all
+heavy expansion (unless24 heavy factories), and required every air factory
+currently producing an ornithopter, hiding mixed carryall workloads.
+
+- Additional High Tech: funded unmet ornithopter demand of at least one plane,
+  >=75% busy capacity, an operational unlocked producer, aircraft/military
+  headroom, funds for factory + aircraft + working buffer. Queued factories
+  prevent duplicate capacity. Evaluate before optional light/heavy expansion;
+  essential economy, power and civic priorities remain. No one-factory cap.
+- Ornithopters raid exposed buildings first; ground units are candidates only
+  when in weapon range +3 tiles of a live own building or harvester. No roaming
+  unit hunts. Defence uses the same visible launcher/rocket-turret coverage
+  checks as raids, including footprint and direct approach. Safety margin is
+  five tiles beyond weapon range (previously two), including turning room.
+  Temporarily unpowered enemy rocket turrets still prohibit attacks nearby.
+- General damage-response scramble previously bypassed safe-air planning and
+  could assign ornithopters directly into covered combat. Exclude them and
+  discard legacy air defence assignments. Safe planner owns their orders and
+  guard points. On withdrawal use a reachable safe actual owned building,
+  avoiding a dangerous base centroid; inside new AA coverage find a nearest
+  safe straight exit. No guarantee against hidden/moving AA or missiles
+  already in flight. Ground contact checks use LocalPointIndex.
+- Dropdowns lead QuantBot Easy, Medium, Hard, Brutal, Defend, then other AIs.
+  Registry labels now spell QuantBot; class identifiers remain qBot* for saves.
+  Campaign and skirmish launch mappings match displayed order. New campaign
+  default and fallback/config-generation default are qBotEasy. Existing explicit
+  saved settings remain user choices. The campaign selector visibly starts Easy.
+- Telemetry policy v66 adds usable air producers / military headroom and raid
+  versus defensive-intercept reasons. Derived logic only; save version9836.
+
+Validation: 582 tests passed, 3 skipped, dependency audits, version consistency,
+menu-to-launch mapping checks, whitespace checks. Coverage includes mixed air
+workloads, pending capacity, tech/funds/unit-cap blockers, raid ranking and
+withdrawal through/around AA coverage. No fresh full-match or interactive menu
+run; the live game was not interrupted. Local app signature/hash verified.
+Installed /Applications/dunecity.app SHA256
+de20ef211518ab0c038928bcecc1b724e29627076ca5612c32009d342d113216.
+Previous647: /Applications/.dunecity-648-6z69dkyn/dunecity-previous.app.
+No remote release or website changes. Existing reports/ remains unstaged.
+
+# Unloading queues and safe rock expansion — 1.0.647 (local)
+
+Stefan reported harvesters queueing at refineries and three adjacent MCV
+expansions instead of colonising new rock. Current 646 session
+1789140497380770-0, Ergsun-Prometh seed1217567228, Rebels house7:
+cycle60293 economy forecast recorded 26 workers / 3 refineries, but zero
+worker income/bay capacity and an empty refinery candidate. Forecasting was
+inside the new-site guard, conflating an unavailable candidate/site with no
+capacity pressure. New diagnostics distinguish availability and site failures.
+MCVs also auto-deployed at a legal factory exit before selecting a site;
+fallback search was only +/-25 tiles with a strong distance penalty.
+
+- Scan owned dropoff occupancy and active loaded harvesters returning within
+  six tiles of a busy bay. A net queue of >=2 beyond free bays sustained for
+  ten simulated seconds triggers capacity investment. A pending refinery
+  suppresses duplicate queue-based orders; normal fleet-capacity forecasts
+  still account for committed bays. No harvester production cap added.
+- Forecast worker/bay throughput using an existing refinery if a new site is
+  unavailable. Queued cargo earns conservative relief credit (at most two
+  loads, capped to actual waiting cargo) without assuming additional spice.
+  Profitable queue relief reserves yard funds before optional civics/defence/
+  zoning. No valid site still cannot authorize an illegal placement.
+- Every fifteen simulated seconds survey free rock in current build range.
+  Under 48 tiles, or sustained unloading queues with no refinery site, a
+  feasible new rock site raises the yard target by one. Reserve MCV money
+  from other producers; the selected heavy factory saves for the MCV/unlock
+  instead of spending the same funds on harvesters or optional units.
+- Expansion MCVs search distinct cardinal rock formations across the map.
+  Require >=48 free rock tiles locally and in the formation, a 2x2 footprint,
+  and a ground route avoiding known fire/recent-loss tiles. Rank distance
+  from visible enemies first, usable space second, travel distance third.
+  Own occupied formations and other MCVs' reserved formations are excluded.
+  Hidden enemies are not consulted as tactical observations. The actual unit
+  movement engine still chooses its route; this does not guarantee its route
+  follows the survey's safe route or remains safe as enemies move.
+- Expansion MCVs cannot immediately deploy at the factory exit. They deploy
+  at assigned sites with fresh local danger/access checks; invalid coordinates
+  are never ordered. First-yard deployment retains existing behaviour. If no
+  new formation exists but current base has ample free rock, ordinary local
+  capacity expansion remains possible; with insufficient space, wait/retry.
+  Failed MCV surveys are throttled to five seconds. All new planning state is
+  derived, not serialized; save version remains 9836.
+- Telemetry policy v65 adds refinery busy/bookings snapshots, waiting cargo,
+  queue pressure, placement rejection details, expansion site/room/enemy
+  clearance/route length and free-base-rock fields.
+
+Validation: 580 tests passed, 3 skipped; dependency audits, version consistency,
+whitespace checks and strict deep signature verification passed. Added queue
+burst/free-bay/pending-bay cases and safe/new/reserved/unreachable/threatened
+formation tests. No fresh full gameplay run: deployment behaviour and queue
+relief must still be observed in the next game. Current 646 game untouched.
+Installed /Applications/dunecity.app 1.0.647, matching build SHA256:
+01352468280c24aadb6020717f765b4878188671eda7cac95b95ccd5174b4a13.
+Previous 646: /Applications/.dunecity-647-1n8_vg2n/dunecity-previous.app.
+Intermediate 647 backup: /Applications/.dunecity-647-final-o6q66g18/dunecity-previous.app.
+No remote release or website changes. Existing reports/ remains unstaged.
+
+# Brutal opening economy, demanded civics and police anchoring — 1.0.646 (local)
+
+Stefan's running 1.0.645 Harkonnen Brutal game, Moshpit seed 406506788,
+session 1789138202535608-0, was slow to compound. Refineries completed at
+cycles 2200 and 7100; the first factory harvester at 23505 (~6.3 simulated
+minutes), with two bays still at cycle 81700. At cycle 73700 the refinery
+forecast was cost 461 / four-minute proceeds 689 versus R cost 109 / proceeds
+53, but a worker-capable factory vetoed the refinery. The broad tax hedge
+also overrode early refinery ROI, and factory priority ended at four workers,
+then required military capital twice worker capital plus a tank cash reserve.
+
+- Brutal custom city games prioritize up to eight committed workers, bounded
+  by the existing remaining-spice/map target. Lower difficulty/vanilla policy
+  stays unchanged. This is a priority floor, never a worker cap. Afterward,
+  Brutal compares equal army/worker capital rather than 2:1; the map target
+  remains authoritative. Preferred workers can use their own purchase money
+  without the optional IX reserve or an additional tank reserve. Optional
+  custom orders cannot preempt them. Emergency reconstruction still applies.
+- Preserve the first demanded R hedge. While the opening workforce is short,
+  defer the broad one-third tax hedge and permit an economically worthwhile
+  third refinery despite a worker-capable factory. The pre-factory opening
+  no longer buys six lots before tech; it compares profitable refineries and
+  then bootstraps vehicle production. Short/unsafe spice trips still lose on
+  the existing cost/power/delay/risk forecast. Beyond the opening, more bays
+  require fleet throughput pressure. Included workers count as committed.
+- First carryall eligibility still begins at four workers, before a second
+  heavy factory, while Brutal continues toward eight. Repair/optional tech
+  waits for the larger workforce floor.
+- Actual NeedStadium/NeedAirport demand selects a feasible civic investment
+  before optional services, production, tech and further zoning. Reserve its
+  purchase price from other factories (initial worker recovery remains an
+  exception), and wait for funds instead of repeatedly buying cheap plots.
+  Essential power/initial economy precede it. Committed civics suppress
+  duplicates; unavailable/unplaceable civics do not lock money. No premature
+  airport based on total population; palace-satisfied R has no stadium demand.
+- Crime at industrial zone (30,4), cycle 83600: pre-police 275, coverage 42,
+  final 233, with PD (24,5), rocket (29,3), full funding and sufficient power.
+  policeSource incorrectly anchored service at its first adjoining road,
+  shifting the source across six-tile district boundaries. Road access now
+  affects strength only; the central occupied building tile anchors service
+  (lower centre for even footprints). Runtime and placement estimates share
+  this helper. Existing Micropolis diffusion, strength, funding/power/road
+  penalties and turret 15% contribution remain. Regression reproduces this
+  boundary layout and drops below Dangerous without a strength buff.
+- Policy telemetry v64 adds opening refinery/Brutal opening fields and civic
+  investment/funding decisions. Save format remains 9836.
+
+Validation: 578 test cases passed, 3 skipped via ctest; dependency audits,
+version consistency, diff whitespace and strict deep app signature passed.
+Four added regression cases cover difficulty/spice limits, the observed
+refinery ROI veto, civic feasibility/commitments, and road-side-independent
+police coverage. No fresh full match was run; next-game growth speed remains
+an empirical check, not a claimed measured improvement.
+
+Installed /Applications/dunecity.app 1.0.646 without interrupting the running
+645 game. Built/installed executable SHA256:
+98af57a74efb6adc8020c9dd85d7fdac7934ccfbeb3181d246c2f1ddb8198dc8.
+Previous app: /Applications/.dunecity-646-ep1iz24v/dunecity-previous.app.
+No remote push, release or website deployment in this task. Existing untracked
+reports/ belongs to earlier game analysis and was not staged.
+
+# Outlying placement and city reinforcements — 1.0.645 (local)
+
+Stefan reported finished R zones stuck despite open sites in widely separated
+edge districts (Harkonnen/Neutral, live 1.0.642 Moshpit game). Verified that
+findPlaceLocation searched only +/-50 tiles from the arithmetic base centre.
+The screenshot supports this limitation; do not claim each shown tile was
+individually proved legal. Normal build-range, terrain, occupancy, pollution,
+road/exit, reactor and threat restrictions remain in force.
+
+- Placement first evaluates its existing central region, then, only if no
+  suitable site exists, the remaining map origins. Passes are disjoint; both
+  results use the existing per-build cache and waiting-yard scheduling.
+  Successful central searches incur no broad second search. Diagnostics add
+  search centre/pass and reservation/road/neighbour rejection counters;
+  completed-yard deferrals include placement quality.
+- Harkonnen city-sim light factories can build trikes. The existing Harkonnen
+  high-tech ornithopter exception is preserved in the shared CityFactionPolicy
+  helper. Tech/upgrades/enabled flags still apply. Vanilla faction restrictions
+  remain unchanged. Actual build lists feed QuantBot's available unit mix.
+- Police always use Palace's HOUSE_FREMEN cooldown (5 simulated minutes),
+  replacing twice the owning faction's palace cooldown (20 min for Harkonnen,
+  10 for most houses). Patrol remains 3 troopers + 1 trike with existing caps.
+  Harkonnen's earlier JSONL already records successful one-trike patrols; it
+  was factory availability, not a universal police spawn ban.
+- Airports automatically deploy a pair of free ornithopters every Palace
+  Harkonnen missile cooldown (10 simulated minutes). Starts with a full timer;
+  requires power to deploy, observes air-unit caps and enabled units, retries
+  local blocked/capped deployment every five simulated seconds. Only on-map
+  unoccupied air tiles qualify (AirUnit::canPass always returns true). Partial pairs
+  retain only their missing aircraft; cooldown resets after the full pair.
+  AI aircraft start STOP for QuantBot's explicit safe-target controller; human
+  aircraft start GUARD, not Hunt. Airport sidebar shows countdown/power/cap
+  status. New airport_unit_spawned/airport_reinforcements telemetry.
+- Save format 9836 adds airport countdown and pending pair count. Older saves
+  give existing airports a fresh timer. New saves restore partial batches.
+  Policy version v63. Existing detailed telemetry stops routine capture near
+  240 MiB of its 256 MiB limit: the still-running game's events.jsonl ends at
+  cycle ~541k while Dune City.log continues past 1.1m. This limits attribution
+  of the latest screenshot; do not present the old JSONL snapshot as current.
+
+Installed /Applications/dunecity.app 1.0.645; strict deep signature verified.
+Built/installed executable SHA256:
+a3c883454b9e01707037c02a0cd2601f56e9c262b21c5b2154d21db057744099.
+Previous app: /Applications/.dunecity-645-b4u98vvi/dunecity-previous.app.
+The running 642 game was not interrupted.
+
+Validation: dependency audits passed; 574 test cases passed, 3 skipped via
+ctest. Added exhaustive disjoint search-region coverage for remote outposts,
+Harkonnen factory/mode restrictions, and partial airport patrol persistence.
+No tactical learner/kiting changes from the preceding analysis were requested
+or implemented here. No remote release or website update in this task.
+
+# Safe ornithopter raids and base air coverage — 1.0.644 (local only)
+
+Stefan requested that ornithopters exploit buildings/units outside launcher and
+rocket-turret protection instead of entering unrestricted Hunt when numerous,
+and that QuantBot build enough distributed air defence for its whole base.
+
+The old strike selector enabled HUNT at a map-scaled aircraft threshold and
+reused active targets without rechecking air defence. Only the special nearby
+reactor shortcut checked anti-air. Turret defence weights included Nuclear,
+Heavy Factory and Repair Yard only, so R/C/I outskirts were amenity targets,
+not assets requiring protection; centre-based square distance also exaggerated
+coverage near diagonal edges.
+
+- QuantBot aircraft now receive explicit forced attacks in STOP mode. STOP
+  suppresses automatic acquisition/retaliatory Hunt; UnitBase::engageTarget
+  still travels/fires at explicit forced targets. There is no size threshold
+  or last-stand exception. Human-controlled units retain their orders.
+- Each tactical pass builds one visible enemy anti-air map (Rocket Turret,
+  Launcher, Elite Launcher, Deviator), using each weapon's actual range plus
+  two tiles of manoeuvre margin and the game's octile distance. Unpowered
+  rockets are ignored only when the match requires turret power. Unknown
+  fogged defenders cannot be inferred. Entire target footprints and direct
+  approaches must be clear. No path through defended space is invented.
+- All enemy ground units and real structures, including zones omitted from
+  configured priority tables, are candidates; existing priorities rank safe
+  choices. Aircraft can independently choose reachable safe opportunities.
+  Existing targets are revalidated as launchers move. Unsafe orders are
+  cancelled and aircraft return to base. A kill no longer authorizes another
+  autonomous target. Badly damaged aircraft are withdrawn.
+- All real base buildings now count as defence assets; surfaces, walls and
+  turrets do not recursively demand protection. Reactors retain two-cover
+  priority. Coverage checks all footprint corners with octile range rather
+  than a square around the centre. Existing/reserved turrets prevent duplicate
+  coverage purchases by parallel construction yards.
+- After opening workers, peaceful city coverage receives a slot after three
+  non-service construction orders; known enemy aircraft make gap filling
+  urgent. This proactive coverage slot is not capped at two turrets or gated
+  on crime/land-value benefits. It still requires an available rocket turret,
+  legal road-preserving site, power and affordable credits plus a zone reserve.
+- New telemetry: ornithopter_safe_strike, ornithopter_hold, base_air_coverage;
+  performance scope ai.ornithopter_safe_strikes. Policy version v62. No new
+  saved fields, random draws or per-candidate full-map searches.
+
+Validation: 571 runnable tests pass, 3 skipped. New tests cover protected
+footprints, exposed districts, clear/blocked approaches, changing launcher
+coverage, diagonal range, building-edge coverage and the expanded asset set.
+Ninja dependency audits passed. Installed /Applications/dunecity.app 644 with
+verified deep strict signature and matching rebuilt executable SHA256
+d45406a6da1a70573eaed622339e599178337d1fae0463bddf6df7f01337c72c.
+Previous bundle: /Applications/.dunecity-644-bw39wsr8/dunecity-previous.app.
+No running match was interrupted. This is local only,
+not a pushed cross-platform release. Restart to use 644.
+
+# Opening economy, base defence and city traffic — 1.0.643 (local only)
+
+Current source fixes Stefan's live 1.0.642 game reports. All 568 runnable tests
+pass (3 skipped), including new opening-worker and traffic regressions; pre/post
+Ninja dependency audits pass. No remote release or website update in this task.
+
+Evidence: ai-decisions/1789131423179778-0/events.jsonl, map Moshpit with
+Garbages, seed 845131971. House 0 had two harvesters after eleven simulated
+minutes despite ample map spice and a 120-worker target. It ordered High Tech
+at 379s, then a 700-credit Repair Yard at 475s with only 118 spendable credits.
+No house ordered a factory harvester in the first eleven minutes. At 1136s,
+crime spawned 14 hostile troopers; repeated defence responses dispatched five
+units but counted zero already committed on subsequent passes.
+
+- Opening city economies prioritise the first four existing/queued harvesters
+  before optional technology, MCVs and repair yards. This is a priority floor,
+  never a cap: the map/lobby target still bounds recruitment, and mature armies
+  still balance military versus workers. First carryall remains ahead of a
+  second Heavy Factory after the opening worker floor.
+- Count outstanding production and upgrade costs once, reserve the next worker
+  purchase, stop unaffordable optional construction, and run the existing
+  demand/suitability/tax hedge before optional infrastructure. Actual power
+  shortages can still queue recovery power. New policy telemetry includes
+  worker priority, protected cash, queued costs and yard-upgrade spending.
+- Distant Area Guard attacks were released as out of range by UnitBase. Defence
+  now forces travel to the contact and releases forcing on arrival. Transit
+  assignments survive intervening AI passes; human control, retreat, death and
+  arrival release them. The old unused escort-assignment save slot is reused
+  with unchanged binary layout; old friendly assignments expire safely.
+- Airport construction uses the same positive-commercial-demand-blocked bit
+  as the human civic notice (commercial population >100 internal), replacing
+  the AI's premature >20 check. Derived bit is recomputed, not serialized.
+  Starport build-menu availability is now 10,000 displayed population for
+  humans and AI (other normal build prerequisites still apply).
+- Traffic changes and comparison limits are documented in
+  docs/city-traffic-balance.md. A logged mid-game snapshot (cycle 172225) had
+  206 heavy cells out of 249 nonzero traffic cells. These are density cells,
+  not percentages of all roads. Tests validate quiet, light and heavy flows,
+  decay, repeatable alternate routes and no duplicate cell stamps at turns.
+
+Installed /Applications/dunecity.app 643; deep strict signature and executable
+SHA256 match the rebuilt bundle (f95545bd5826565b11973050dc9e972a656046a6fd089162bebd72399e5a04a7).
+Previous app preserved at /Applications/.dunecity-643-865wluqn/dunecity-previous.app.
+The running 642 match was not interrupted or relaunched.
+New code takes effect on the next launch; existing traffic values decay through
+normal simulation updates rather than being silently reset on load.
+
+# Remote release 1.0.642 — verified 2026-09-11
+
+Published the accumulated 631–642 changes at tag `v1.0.642`, commit `29b1f5f`.
+Latest local 642 commit was amended before its first push to include release notes;
+it replaces the earlier local-only `df40853` ID without changing game code.
+Main and fix/dunecity-ui-quantbot were fast-forwarded. Release build
+[34595302140](https://github.com/VR48/dunecity/actions/runs/34595302140) passed
+version verification, Linux tests and all three desktop platforms. Six assets
+published at https://github.com/VR48/dunecity/releases/tag/v1.0.642.
+Duplicate main build 34595302154 was cancelled; ordinary cancellation did not
+stop its always-conditioned jobs, so the Actions force-cancel endpoint was used.
+
+SourceForge mirror [34596266575](https://github.com/VR48/dunecity/actions/runs/34596266575)
+verified all eight uploaded files by SHA256, advanced the dedicated `dunecity`
+source branch, published `dunecity-v1.0.642`, and confirmed Windows/macOS/Linux
+platform defaults at 642. No source archive uploaded; Legacy master preserved.
+
+Website automation advanced links, then website commit `c7fb363` updated release
+prose. Deploy to Droplet `34596363046` passed. Live index and dune-city pages
+returned HTTP 200 and all six 642 desktop links with the corrected summary;
+Android remains independently versioned at 0.2.25.
+Legacy SourceForge website copy committed on its master as `c06f68f`, deployed
+by SFTP temporary upload/rename, compared byte-for-byte after readback and
+verified in-browser at downloads.html?updated=642. Corrected obsolete road
+upkeep/shared-construction-range claims and described economy, transport and
+750 HP reactors. Backup: /tmp/dunecity-sf-web-642/downloads-before.html.
+Plain HTTP tooling encountered SourceForge bot filtering (403); browser
+verification worked. This game repo contains the same updated legacy HTML.
+
+Local /Applications/dunecity.app was already 1.0.642 from the implementation
+turn; version and deep strict signature verified again without launching.
+The earlier local-only entries below are historical checkpoints, now released.
+
+# Nuclear plant 750 HP — 1.0.642 (local only)
+
+Stefan revised reactor health from Palace-equivalent 1,000 to 750 HP. Default and
+Tornie data now use 750; new city matches force 750 instead of copying Palace HP,
+so older user ObjectData files cannot silently retain the previous balance.
+Palace HP, reactor power/cost and explosion damage/radius are unchanged. Existing
+saves retain their saved stats. A 900-damage reactor blast or centered palace
+strike can again destroy a full-health reactor. Updated the existing balance test
+and Tornie's ObjectData checksum (the earlier edit left that checksum stale).
+
+Validation: release build, dependency audits and CTest passed (564 passed,
+3 optional skips); bundled data/checksum and signature verified. Installed locally
+as /Applications/dunecity.app without launching; no remote push or release.
+SHA256 6499b00a8624225b37ee4902652ecc0f2608844864664cf269d1c6d17a366848.
+Backup /var/folders/3y/kfqmr__n2wz56wnvn919zhxh0000gn/T/dunecity-before-642.b1x3jou6/dunecity.app.
+
+# Palace-strength nuclear plants — 1.0.641 (local only)
+
+Stefan requested nuclear HP equal to Palace HP. Default and Tornie reactor stats
+increase from 500 to 1,000 HP. New city games now copy each house's Palace HP
+(including custom overrides), replacing the previous Starport comparison.
+Existing saves retain their saved object-data stats; start a new match for this
+balance. Blast radius/damage, price and power output are unchanged. A full-health
+standard reactor now survives one centered 900-damage strike/neighbor blast with
+100 HP; damaged reactors can still chain-react. Updated the existing balance test.
+
+Validation: dependency audits, release build, CTest (564 passed, 3 optional skips)
+and bundled config checks passed. Signed/hash-verified /Applications/dunecity.app
+1.0.641 installed without launching; no remote push or release.
+SHA256 11d24800fb5797373ef2685130ec3c37d9dd192d4841af81d83c6460e24aa066.
+Backup /var/folders/3y/kfqmr__n2wz56wnvn919zhxh0000gn/T/dunecity-before-641.ogqah3tq/dunecity.app.
+
+# Earlier nuclear, recovery budgets and road reuse — 1.0.640 (local only)
+
+Stefan approved the remaining 638 match findings with one correction: redirect
+finished redundant roads to another useful gap; do not cancel/refund them.
+
+- City QuantBot plans nuclear once demand reaches three windtraps' output and
+  available power approaches the growth reserve plus one windtrap. A legal,
+  unlocked reactor and committed Heavy Factory are required; first transport
+  stays ahead. Save the actual reactor price before optional yard/factory orders;
+  release reservations during blackouts so affordable wind can restore power.
+  Count queued generation and retain reactor clearance/placement checks. Existing
+  zone maturity headroom anticipates regrowth after blackouts. No tax/power stats
+  changed; this is investment timing, not a blanket opening nuclear order.
+- Custom city AI reviews police funding every 30 simulated seconds. Major losses
+  mean >=max(3, remaining structures/10) destroyed in the last three minutes.
+  With cash <2,000 and police bill >75% of tax after power, cut up to 25 points,
+  targeting half that income with a 25% funding floor. Restore 25 points when
+  cash >=5,000 or post-power tax covers twice nominal police expense. Support
+  mode does not change the shared house budget. Added city_police_budget events.
+- Fixed CMD_CITY_SET_BUDGET applying to the local viewer: resolve the command's
+  issuing player's house instead. Human UI keeps its local-house accessors.
+- Finished redundant/blocked roads reuse the existing connected frontage/through
+  gap candidate search. Exclude other queued sites; preserve the following plan.
+  Hold the finished road if no useful gap exists, retry after five seconds; only
+  one maintenance/redirect attempt per build pass. Restore its queue position if
+  placement fails. No cancellation or additional pathfinding; a held road can
+  keep that yard occupied until a useful site becomes available.
+- Telemetry policy nuclear-budget-road-reuse-v60; nuclear_investment_due state,
+  save_nuclear_growth/nuclear_growth_investment decisions and road replan reasons.
+  Runtime review/retry timers reset on load; save layout is unchanged.
+
+Validation: release build, dependency audits and CTest passed (564 passed,
+3 optional skips, 9,726,326 assertions). Signed/hash-verified local installation
+at /Applications/dunecity.app, without launching the game.
+SHA256 047992f9666163a802ff7b59fad98f0218c1849f520b6749e17e96175c67ff5c.
+Backup /var/folders/3y/kfqmr__n2wz56wnvn919zhxh0000gn/T/dunecity-before-640.j206fhup/dunecity.app.
+Live match behavior/balance still needs a new match. No remote push/release.
+
+# Early carryalls, refinery capacity and continuing tax hedge — 1.0.639 (local only)
+
+Current branch fix/dunecity-ui-quantbot. Stefan requested first transport before a
+second heavy and earlier R/C/I alongside spice. Completed 638 session
+1789115118630650-0 confirmed 22–32 refineries and only one R per AI at ~20min;
+all 106 sampled refinery choices had no processing-capacity need. High Tech
+followed 3–5 heavies. It was buying refineries for workers while military
+factories stayed busy; the residential hedge stopped after one plot.
+
+- Custom QuantBot in city/vanilla prioritizes first High Tech and carryall before
+  additional Heavy Factories where tech/site/air capacity allow. Save actual HT
+  price; protect first carryall funds from other builders, skip optional upgrades
+  until affordable, and set minimum carryall target 1 for an active workforce.
+  Counts pending orders, releases the cash reserve during power loss, and avoids
+  indefinite ground expansion gates when no feasible transport build exists.
+- City refinery investment now follows marginal processing capacity. A busy
+  worker-capable Heavy Factory does not justify another otherwise unused bay.
+  No worker factory, or workforce below two, can still justify included-worker
+  recovery. Needed bays which repay their full cost get priority over tax hedge.
+  Existing and queued bays/workers count; added capacity cannot duplicate itself
+  across yards. Workers remain governed by spice/map limit and military priority,
+  never a workers-per-refinery cap. Payouts/harvesting mechanics are unchanged.
+- Continuing tax hedge: forecast tax >= one third of fleet income (25% combined),
+  crediting half low-density income of demanded developing/queued lots. Suitable
+  R/C/I get alternating ten-second early-priority windows so other infrastructure
+  still has opportunities. Normal demand/site checks remain. No saved AI state or
+  added world/path scan. Investment still uses ground-trip estimates rather than
+  observed queues/carryall improvements; validate balance with a new full match.
+- Telemetry policy transport-tax-hedge-v59. Added income/factory-supply fields and
+  first_transport_factory, save_first_transport_factory, first_carryall,
+  save_first_carryall, city_income_hedge and city_refinery_capacity decision rules.
+
+Further observations (recommendations only): save toward nuclear earlier (only
+Neutral bought it, at ~67min); reduce service-budget burden after city losses
+(Ordos ~50min: 695 gross tax vs 575 police/min). Road cancellations mostly cancel
+redundant single road steps: 115/125 already had roads, not whole building plans.
+AI frame max 18.9ms/build max 12.1ms; frame max 170ms with three >100ms samples,
+including one unit-update spike 159.2ms. Full evidence in docs/city-economy-balance.md.
+
+Validation: dependency audits, release build and CTest pass: 560 passed, 3 optional
+skips, 9,726,298 assertions. Signed/hash-verified /Applications/dunecity.app installed
+as 1.0.639; no game launch, remote push or release.
+SHA256 d13775877db6911712b370ca70b3639993f535cfe858e3d82cf30f233d8e1d2c.
+Backup /var/folders/3y/kfqmr__n2wz56wnvn919zhxh0000gn/T/dunecity-before-639.q4lh_9qp/dunecity.app.
+
+# Double private-zone tax — 1.0.638 (local only)
+
+Stefan chose 2x R/C/I income rather than 3x fleet parity: tax is easier and less
+exposed than harvesting. Added kZoneTaxMultiplier=2 in the shared weighted tax
+base. All private zone densities and partial houses receive it; Palace remains
+at unboosted R+C and other government infrastructure remains exempt. Census,
+actual payouts, UI and AI share the multiplier; updated QuantBot indirect
+residential tax forecast to use the helper too. Policy parallel-city-economy-v58.
+
+At 7% tax/LV128, high R/C/I yield ~104.53/104.53/83.63 credits/min; Palace
+~104.53 unchanged. Power, demand, jobs, growth, road upkeep and harvesting
+unchanged. No extra scans or save-format changes. Detailed fleet comparison
+and rates are in docs/city-economy-balance.md.
+
+Yard/factory review: Stefan explicitly rejected 3/4 workers-per-refinery caps.
+City factories target remaining-map-spice capacity and the map harvester limit;
+refinery count never caps production. Removed direct 3-per-refinery gate for
+vanilla QuantBot too; its existing target/refinery policy remains. Removed city
+hypothetical-refinery reserve.
+Yards choose zones alongside a funded idle factory that prefers a harvester unless processing
+needs another bay; busy factories leave included-worker refinery option eligible.
+Capacity uses 75% ideal unloading; marginal forecast credits actual first loads
+and bay relief, not existing fleet or unqueued future workers. Queued refinery
+workers counted across passes. Power capital uses owned generators plus foundation.
+Added decision telemetry and regressions for spare/busy factory, shared bays,
+queued bays, first delivery and unsafe fields. Vanilla refinery-build ratios unchanged; factory worker gate removed.
+
+Factory allocation clarification: a spice target is not unconditional worker
+priority. Recover fewer than two committed workers first; otherwise while an
+affordable military order is needed, require military value of about 2x current
+worker purchase value before spending another slot on a harvester. Once army
+target is met, grow to spice/map target. Includes committed queues and falls
+through to military selection when workers defer. Yard forecasts use the same
+choice; telemetry factory_economy_priority. No new persistent AI state.
+
+Validation: final dependency audit/build/CTest pass, 556 passed and 3 optional
+skips. Signed/hash-verified local /Applications/dunecity.app 1.0.638 installed.
+SHA256 2266a41ea980f68eeba7b777935c30cbab666b18708d6c1aa3e82162bc1aadf1.
+Backup dunecity-before-638.ba21axvi. No game launch, remote push or release.
+Live balance still needs the next match; capacity is a throughput forecast,
+not a measurement of local queue wait times. No pathfinding was added.
+
+# Micropolis tax, Palace income and road upkeep revert — 1.0.637 (local only)
+
+Stefan authorized implementation of the Micropolis easy tax comparison, made
+Palace an R+C tax exception, and requested road costs/ownership reverted.
+
+- Tax now uses (taxableR/8+C+I)*landValue/120*taxPercent*1.4. Only R/C/I zones
+  and Palace pay. Eighth-unit census preserves partial houses until aggregate
+  annual rounding; smooth per-cycle payouts and 60s year retained. This is the
+  easy formula, with less intermediate truncation than Micropolis tiny cities.
+  Zero land value now yields zero actual tax; unknown future-land forecasts may
+  assume 128. Government jobs/demand are separate from taxable population.
+- Palace contributes BOTH R and C at its occupancy tier. At 7%/LV128, high R/C/I
+  are ~52.27/52.27/41.81 credits per simulated minute; Palace ~104.53. Full tier
+  table and harvester comparisons are in docs/city-economy-balance.md.
+- Budget, QuantBot economy/service/production forecasts and Mentat use the same
+  tax base. Also fixed two extracted MentatBuildOrder variants still using gross
+  population (the Mentat variant is compiled), missed by earlier exemption.
+  Telemetry replaces taxable_pop with tax_base_eighths; policy micropolis-tax-palace-v57.
+- Removed road upkeep at every population and the maintenance ownership feature:
+  no census, deductions, road-only owners, AI road expense, or old-save inference.
+  Auto frontage and city road-overlay command preserve underlying tile owners.
+  Normal manually placed foundations/roads retain their tile ownership behavior;
+  enemy concrete/roads still do not extend construction range. Existing saved
+  tile ownership stays; cannot distinguish historical inferred owners safely.
+  Road overlay/foundation/traffic behavior, build prices and police upkeep remain.
+- No save-format changes or added scans/pathfinding. Latest 636 factory roles and
+  normal configured zone construction timing retained. Live balance validation
+  remains pending; tests stub the full world runtime scans.
+
+- Final dependency audit, build and CTest passed: 554 tests passed, 3 optional skips.
+  Installed signed/hash-verified /Applications/dunecity.app 1.0.637.
+  SHA256 3898ee9a75e6a21e4b05e7147b5be467b3072d9a767d9ba72a8eee6c50615644.
+  Backup: dunecity-before-637.7w3j44an. No game launch or remote push/release.
+
+# Revised factory roles and normal zone construction — 1.0.636 (local only)
+
+Stefan revised the mapping again after 1.0.635: Light Factory is now low-density
+I; Heavy Factory, High Tech Factory and Repair Yard medium-density I; House IX
+high-density C. This supersedes 1.0.634's High Tech high-C interpretation.
+
+- Roles, caps, supply/population/emissions helpers and sidebar labels agree.
+  Existing load reconciliation clamps old high occupancy automatically. Factory
+  emissions follow the tiers: Light 10; Heavy/HighTech/Repair 25. IX stays clean.
+- Government infrastructure stays non-taxable; private R/C/I tax formula still
+  unchanged. Refinery medium I, Silo low I, WindTrap power only and Starport
+  seaport remain as previously requested. Includes 1.0.635 balanced zone choice.
+
+- Stefan's final timing instruction is normal construction timing. R/C/I use
+  their configured build time through the standard BuilderBase production path,
+  removing the instant-zone override. Default 40 is ~9.6 simulated seconds at
+  full builder speed; house/mod overrides respected. This supersedes the earlier
+  silo-time request. Roads, instant-build mode and zone prices remain unchanged.
+- QuantBot tax-investment delay includes normal configured construction time
+  plus its existing 60s growth/foundation allowance. Population growth itself
+  is not accelerated. Regression tests cover all zones, overrides and zero-time
+  safeguards. No new save fields, scans or pathfinding.
+
+- Final build, before/after dependency checks and CTest pass: 557 passed, 3 optional
+  skips. Installed signed/hash-verified /Applications/dunecity.app 1.0.636,
+  SHA256 7194a3cd6eece9e4a0cb8224e9ac1056d262e535ae992743a02a07eb1b24bc59. Backup: dunecity-before-636.66dh8ro3.
+  No launch/interruption of ongoing game, no remote push or release. Runtime
+  balance still needs a subsequent live game; tests stub the full world scans.
+
+# Balanced R/C/I selection — 1.0.635 (local only)
+
+Stefan's current game screenshot showed R -1110 / C +1360 / I +1500 and little
+industry. Session 1789107959898835-0 is actually 1.0.634, DuneCity 192x192, seed 460150850.
+Snapshot at ~cycle 82000: 49 of 52 evaluations with R<500 and both job demands
+positive selected C; 3 selected I. House2 had built 32 R / 15 C / 5 I, so industry was
+suppressed intermittently, not universally unavailable. Example cycle 21248:
+5 R / 1 C / 1 I, demand -530/1500/1419, I marked lower_rank_not_evaluated. Another at
+cycle 71648 chose R via infill despite demand 1685/224/1500 and counts 18/10/5.
+
+- Removed the hard C-before-I 500 gate. Normalize demand maxima (R 2000, C/I 1500).
+  Among positive candidates within 20% of strongest demand, choose underprovided
+  built+queued plots with the existing 3:1:1 R/C/I tie-balance. Stronger demand
+  wins outside that band. A fixed strongest reference preserves sort transitivity.
+- Removed unconditional residential infill promotion across zone types. Existing
+  placement scoring still favours gaps for housing when R is the selected need.
+  First demanded R hedge preserved; no forced missing C/I at nonpositive demand.
+- No new scans/state/pathfinding. Existing suitability/site fallback and marginal
+  tax/refinery investment comparison remain. Telemetry rule now
+  normalized_demand_band_then_committed_balance, policy balanced-zone-demand-v56.
+- Regression cases reproduce screenshot and log states, queued commitments,
+  sustained slightly unequal positive C/I demands, and near-zero I exclusion.
+  Includes 1.0.634 government tax and employment changes; Micropolis formula
+  remains a comparison only. Live post-fix balance validation pending.
+
+- Build and before/after dependency audits passed; CTest 556 passed, 3 optional
+  skips. Installed signed/hash-verified /Applications/dunecity.app 1.0.635,
+  SHA256 e04112fdbd9b739e98bb6a85633e2506f69c608b0ca394f83655e0d751825230. Backup:  dunecity-before-635.4xsde6uo.
+  Did not launch/interrupt the live 1.0.634 process. No remote push/release.
+
+# Government tax exemption and infrastructure roles — 1.0.634 (local only)
+
+Stefan requested Micropolis-equivalent R/C/I numbers (comparison only) plus
+non-taxable government infrastructure and revised employment tiers.
+
+- Only actual R/C/I zones pay tax. All government/non-zone infrastructure is
+  excluded, retaining its other jobs/population roles. Partial R lots pay for
+  actual houses. Gross city population still governs unemployment and the
+  under-2000 road-upkeep exemption. Existing tax rate/time conversion unchanged.
+- WindTrap no longer supplies industry. Light Factory/Refinery cap at medium I;
+  Silo low I; Heavy Factory/Repair Yard high I; High Tech high C (final user item
+  overrides its earlier contradictory high-I listing). Starport stays seaport.
+  Sidebar role labels corrected, including old Refinery/Starport mislabelling.
+- Tiers clamp jobs/population/emissions and loaded occupancy; existing aircraft
+  manufacturing emissions retained for High Tech's commercial employment.
+  Derived taxable census added to existing scans, payout, budget and QuantBot /
+  Mentat income forecasts, including service-investment tax gains. No new scan
+  or serialized field; telemetry adds taxable_pop for comparisons with R/C/I.
+- Micropolis easy at tax7%, LV128 would yield high R/C/I approximately
+  52.27/52.27/41.81 annually, also per simulated minute with the existing 60s year.
+  Current zoned high R/C/I remain 186.67/23.33/18.67. R is 3.57x Micropolis;
+  C/I are 0.446x. Formula restructuring has NOT been applied. Full tier table and
+  government scope are in docs/city-economy-balance.md.
+- Local build and dependency audits passed. CTest: 555 passed, 3 optional skips.
+  Role/tier regression
+  tests cover old occupancy, jobs versus tax, government structures and partial
+  R lots. Runtime scans are stubbed in the test target; a live match remains
+  necessary to validate long-term economy balance. No push or remote release.
+
+- Installed /Applications/dunecity.app 1.0.634 without launching the game.
+  Signature verified; executable SHA256 matches the built bundle:
+  b043ad88c521adb18123d12acb18fa957b74ff5bc7a3091ffe914e5ce5309fe1.
+  Previous app backed up in temporary dunecity-before-634.x8wfd95b directory.
+
+# Demand-led tax/spice investment — 1.0.633 (local only)
+
+Stefan wants an opening R tax hedge, no forced one-each R/C/I seed, and an
+explicit refinery-versus-tax comparison that recognizes existing bay capacity.
+The 1.0.631 Habbanya-Penny log 1789102780668848-0 includes opening C orders at
+zero demand. I was positive at its recorded initial orders; the later screenshot
+alone does not prove I was ordered at negative demand. Source rankZones did
+explicitly allow missing types with zero/negative demand; that override is gone.
+
+- First refinery retained for income/technology. Then a demanded R hedge;
+  missing C/I no longer prerequisites for first vehicle factory. Opening and
+  ongoing custom-city investments use one four-minute proceeds-per-credit model.
+- No additional refinery investment if current/queued bays already cover the
+  sustainable near-term fleet (workers plus three, capped by sustainable target).
+  Compare marginal delivered spice, not a whole fleet credited to a new bay.
+- Tax candidate uses live positive demand and existing valid-site selection,
+  price/foundation/generation cost and future road upkeep, low/medium growth with a 60-second delay,
+  tax/house land value, pollution/crime, pending/undeveloped same-type lots and
+  limited job-enabled residential tax for C/I. Refinery includes fill/unload and
+  construction delays, local sampled trip distance, spice share and danger.
+- Vanilla economy retains its prior refinery policy. No extra pathfinding or
+  save fields; bounded local spice sampling once per build pass. Telemetry-only
+  per-yard throttle added, policy demand-tax-spice-investment-v55. Sampled
+  city_economy_comparison exposes every forecast component and selected item.
+- Tax amounts/budget balance unchanged. See docs/city-economy-balance.md for
+  Micropolis comparison and exact cycle-based harvester equivalences. Budget
+  /60 matches payouts, but excludes separate power/unit/construction costs.
+  Raw R taxation makes mature R ~3.57x Micropolis easy-mode annual revenue;
+  C/I ~0.446x, with upkeep largely retaining original scale.
+- Local build, before/after dependency checks and CTest passed (553 cases,
+  three optional skips). Includes local 631 power and 632 road fixes. No live
+  match validation yet; forecast heuristics need follow-up logged matches.
+- Installed /Applications/dunecity.app 1.0.633, signature checked and executable
+  hash matched to build bundle. Previous app backed up under temporary
+  dunecity-before-633 directory. No launch/interruption, remote push or release.
+
+# Enemy roads are foundations, not construction anchors — 1.0.632 (local only)
+
+Stefan clarified that enemy roads must behave like enemy concrete: a house can
+build over them within its own normal build range, but cannot expand from an
+unrelated enemy road network. This supersedes 1.0.630's shared-access rule below.
+
+- Map::isWithinBuildRange again recognizes only tiles owned by the constructing
+  house, with the existing two-tile search. Road flags and city mode do not grant
+  additional reach. Applies equally to humans and every AI.
+- Road foundations remain prepared ground, independently of owner; footprint
+  placement retains terrain/occupation checks. Building on a road inside normal
+  range clears the road under the footprint and stamps the new building's owner.
+- MCV deployment remains unchanged: its new construction yard creates the owned
+  foothold, allowing normal building around it. Enemy roads beyond that range
+  do not extend the foothold. Existing road upkeep ownership is unchanged.
+- Replaced the regression that endorsed map-wide shared road access with
+  owner-only reach cases, retaining foundation and placement integration checks.
+  No new scans, pathfinding or save fields. Policy owned-construction-reach-v54.
+- Local build/dependency audits passed; CTest550 passed, three optional skips.
+  Includes 1.0.631 power planning. Installed /Applications/dunecity.app version
+  1.0.632, signed and executable verified against build bundle. Prior app backed
+  up under a temporary dunecity-before-632 directory. No game launch/interruption.
+  No remote push/release this turn; published 1.0.630 still has the old road rule.
+
+# Growth-aware nuclear investment — 1.0.631 (local only)
+
+Reviewed completed city 1.0.630 session 1789087168596776-0, SCENA021.INI,
+62x62, ending cycle180523 (~48.14 simulated minutes). The logged QuantBot is
+house1. Of 41 generator-choice records, 40 chose wind and one nuclear. At40.75min,
+it chose wind with234,226 spendable credits, need489 and a valid reactor site:
+five100-output windtraps cost1,500, below the2,000 reactor, so the old incremental
+cost rule ignored the wealthy city's need for reserve capacity. 34 records had
+nuclear_site=false; old telemetry combined unavailable tech and rejected sites,
+so it cannot prove which placement restriction caused each failure. A completed
+reactor was placed through power-recovery fallback at29.81min, risk500.
+
+The log contains1,446 power_shortage decline events (all reduce population;
+1,236 also reduce density). Only2/95 periodic snapshots showed deficits, so
+snapshot averages hide short blackouts and subsequent zone shrinkage. The old
+30-second trend discarded forecast growth when density/power demand fell.
+
+Changes:
+- Account for every owned zone's mature density3 load minus its exact registered
+  power draw (including individual residential houses), plus mature queued zones
+  and other queued consumers. Use the larger of latent zone load and observed
+  two-minute growth, avoiding double counting. This headroom drives the early
+  power trigger as well as generator selection, retaining normal reserve.
+- When additional power is needed, prefer an affordable reactor during a deficit
+  or when spendable cash after queued orders covers five reactor prices plus
+  working capital (normally ~10k). Small funded starts still compare wind cost
+  and space; exact cost parity now favours nuclear. Pending-generator guards stay.
+- Reactor search ranks safe separated sites first; known threat/loss halos and
+  four-tile blast clearance are preferences rather than blanket reactor vetoes.
+  If none is safe/separated, use the best remaining legal footprint. Terrain,
+  occupied buildings, ground exits, roads and neighbouring access remain checked.
+  New critical buildings retain the separation veto beside existing reactors.
+  Completed generator placement uses the same separation preference. Existing
+  redevelopment paths remain conservative. Nuclear placement risks are logged.
+- Add zone current/mature draw, committed load, growth headroom, shortage,
+  nuclear availability and detailed candidate rejection/risk telemetry. Skip the
+  extra wind-site counting scan when wealth/recovery already decides nuclear;
+  zone loads share the existing structure loop. Policy zone-growth-power-v53.
+- Regression tests cover the recorded rich-city decision, protected cash,
+  blackout-recovery load invariance and reactor safety/separation ranking.
+  CTest550 passed/3optional skips; dependency audits and build passed. Save layout
+  unchanged. No final full-match replay validation or remote release this turn.
+- Signed 1.0.631 installed at /Applications/dunecity.app; executable matches
+  build/bin/dunecity.app SHA256
+  b55294a1d3f74cda0696f46292b7f98a0ca5a55ba7c192948c238341c7ab1082.
+  Prior app preserved in temporary dunecity-before-631.28kyr3x6 directory.
+  No running match interrupted and no launch used for version verification.
+
 # Shared city road access and desktop release — 1.0.630
 
 Stefan requested enemy roads be reusable, then authorized local/remote builds
@@ -896,7 +2762,7 @@ includes dangerous-building count, requested force, mean crime and buildup rate;
 member records identify each spawn-origin building.
 
 Built and signed locally1.0.605. Ninja dependency audits passed, version metadata
-consistent. CTest482passed,3optional skipped. Tests cover4/6minute boundaries,
+consistent. CTest482passed, 3optional skipped. Tests cover4/6minute boundaries,
 cluster size/history, policing/small-population reset, district spread, old/new
 save codecs with trailing sentinels and invalid sizes, heavy overflow balancing,
 parallel cap/cash consumption and light backlog expansion gates. Not pushed,
@@ -987,7 +2853,7 @@ locally; not pushed, released, launched or tested in a live match.
 
 # Completed 601 match review after simple-controller build
 
-Session1788846458415706-0 ended cleanly at760548cycles/202.81simulation minutes,
+Session 1788846458415706-0 ended cleanly at760548cycles/202.81simulation minutes,
 local_result ended_without_result; all four houses alive with999999credits. This
 was the old601 controller throughout, not a602 test. FinalSQLite import266721rows,
 no invalid/deferred tails; auditclean. DBbuild/review-601-live.sqlite and final
@@ -1068,7 +2934,7 @@ multiplayer path queue. No new random calls. Telemetry policy simple-hunt-v40 ad
 `ground_hunt`, `defence_response`, `harvest_army_rally` in generic SQLite events.
 
 Validation: local Release602 built, dependency audit passed before/after, CTest
-passed (471 cases passed,3optional skipped), app signature and version checked.
+passed (471 cases passed, 3optional skipped), app signature and version checked.
 Tests cover defence force sizing, existing responders, insufficient armies,
 deterministic nearest-first selection and bounded blocked rally destinations.
 Live FPS/combat and two-peer save/load still require runtime verification.
@@ -1215,7 +3081,7 @@ skips. The retry path itself awaits a real transient failure in a future game.
 
 # Cash-first city MCV expansion — 1.0.598
 
-Session1788799572693304-0 v597: both houses stayed at two yards with
+Session 1788799572693304-0 v597: both houses stayed at two yards with
 ~100k–140k credits because only one R/C/I valve was positive. A second positive
 valve raised the target to six; both reached six within ~40 simulation seconds.
 User rejects demand gating. Wealth now sets minimum yard targets5 at20k,
@@ -1937,7 +3803,7 @@ Further static audit found fourZoneBlockBonus independently reading off-map neig
 and its road perimeter. 555 skips block layouts whose full4x4+road perimeter cannot fit;
 individual edge lots remain legal, they merely receive no block bonus. Regression checks
 all candidate origins/offsets on128x128. Placement failure telemetry also bounds tile reads.
-Session1788691499646985-0 endedcycle95 and1788691615471597-0 cycle99 in554; normal log
+Session 1788691499646985-0 endedcycle95 and1788691615471597-0 cycle99 in554; normal log
 was overwritten by later menu launches, so exact second exception was not retained.
 Do not claim full runtime verification. New simulation_exception event wraps updateGameState
 before destructor closes telemetry; subsequent launches cannot erase that session evidence.
@@ -2857,3 +4723,34 @@ The user-authored single-player maps `4P - 192x192 - DuneCity.ini` and
 source is the local Dune City user-map directory on this Mac. The files are
 kept byte-for-byte unchanged, including their CC-BY-SA metadata, and are
 packaged under `Resources/maps/singleplayer` by the existing data copy step.
+
+
+## 2026-09-13 — HTTPS polling candidate 1.0.658
+
+Current work on `fix/network-hardening` adds browser/native HTTP polling over the
+existing Apache/PHP server, preserving the relay/game protocol. No main/public
+release or cron activation yet. See `docs/https-relay-deployment.md` for verified
+constraints, tests and remaining release gates; `docs/room-relay-http-polling.md`
+for the transport. Node analytics accepts a private key file and emits schema2
+with observed `https-poll`; the website receiver changes are in the separate
+`dunelegacy-relay-analytics` worktree. Never bundle the deployed private keys.
+
+User testing found two failures: generated EM_JS escaped a regex incorrectly,
+rejecting successful open responses; duplicate default names were refused but
+presented as an ended game with controls disabled. Both are fixed, with compiled
+JS and relay-session regression coverage. The lobby has a separate Join Game
+button and Change name action. Local two-browser gameplay has started successfully;
+this does not attest public Apache multiplayer. Test service 18790 and web8768
+serve the local 1.0.658 candidate, separate from old8787/8766 clients.
+
+Follow-up verification on the same candidate: metaserver Node22.23.2 passed all
+200 relay tests and its PHP8.3 gateway contract checks. A bounded launch of the
+exact candidate under Landlock + Node permissions reported analytics enabled,
+answered authenticated health and refused unauthenticated health. It was stopped
+and the prior candidate symlink restored; no public gateway or cron installed.
+Hermes reviewed frozen source402caf4 (artifact SHA256 recorded in the review),
+reported no new source-verified blocker, and passed200 tests. Its bounded run
+interrupted one parallel review worker; this is limited review, not full security
+certification. Existing production/watchdog gates remain. Browser match logs
+advanced beyond31500 cycles with a tested movement order and no reported state
+digest mismatch; host and guest continued exchanging performance reports.

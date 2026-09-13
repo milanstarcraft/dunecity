@@ -435,13 +435,11 @@ bool Map::okayToPlaceStructure(int x, int y, int buildingSizeX, int buildingSize
 }
 
 bool Map::isWithinBuildRange(int x, int y, const House* pHouse) const {
-    const bool cityMode = currentGame && currentGame->isCitySimEnabled();
     for (auto i = x - BUILDRANGE; i <= x + BUILDRANGE; i++) {
         for (auto j = y - BUILDRANGE; j <= y + BUILDRANGE; j++) {
             const auto tile = getTile_internal(i, j);
 
-            if (tile && DuneCity::isConstructionAnchor(cityMode, tile->isRoad(),
-                    tile->getOwner(), pHouse->getHouseID()))
+            if (tile && DuneCity::isConstructionAnchor(tile->getOwner(), pHouse->getHouseID()))
                 return true;
         }
     }
@@ -653,6 +651,23 @@ void Map::selectObjects(const House* pHouse, int x1, int y1, int x2, int y2, int
         }
 
         if((lastCheckedObject != nullptr) && (lastCheckedObject->getOwner() == pHouse)) {
+            // Buildings have a single-object sidebar. Shift must not combine a
+            // building with troops (or another building) into a troop command panel.
+            if (lastCheckedObject->isAStructure()) {
+                currentGame->unselectAll(currentGame->getSelectedList());
+                currentGame->getSelectedList().clear();
+                currentGame->selectionChanged();
+            } else if (objectARGMode) {
+                auto& selection = currentGame->getSelectedList();
+                for (auto it = selection.begin(); it != selection.end();) {
+                    auto* selected = currentGame->getObjectManager().getObject(*it);
+                    if (selected && selected->isAStructure()) {
+                        selected->setSelected(false);
+                        it = selection.erase(it);
+                        currentGame->selectionChanged();
+                    } else ++it;
+                }
+            }
             if((lastCheckedObject == lastSinglySelectedObject) && ( !lastCheckedObject->isAStructure())) {
                 for(auto i = screenborder->getTopLeftTile().x; i <= screenborder->getBottomRightTile().x; i++) {
                     for(auto j = screenborder->getTopLeftTile().y; j <= screenborder->getBottomRightTile().y; j++) {

@@ -16,6 +16,9 @@
  */
 
 #include <Menu/HouseChoiceMenu.h>
+#include <sand.h>
+#include <Menu/PlaySetup.h>
+#include <Menu/SinglePlayerSkirmishMenu.h>
 #include <mod/ModManager.h>
 
 #include <globals.h>
@@ -23,6 +26,7 @@
 #include <FileClasses/GFXManager.h>
 #include <FileClasses/TextManager.h>
 #include <GUI/Spacer.h>
+#include <GUI/MsgBox.h>
 #include <GUI/dune/GameOptionsWindow.h>
 #include <Menu/HouseChoiceInfoMenu.h>
 #include <SoundPlayer.h>
@@ -56,114 +60,172 @@ const char* const kSupportPlayerClasses[] = {
     "qBotSupportEasy",
     "qBotSupportMedium",
     "qBotSupportHard",
-    "qBotSupportBrutal"
+    "qBotSupportBrutal",
+    "qBotEasy", "qBotMedium", "qBotHard", "qBotBrutal", "qBotDefend"
 };
 
 constexpr int kSupportOptionCount = sizeof(kSupportPlayerClasses) / sizeof(kSupportPlayerClasses[0]);
 
 const char* const kEnemyAIClasses[] = {
-    "CampaignAIPlayer",
-    "qBotEasy",
-    "qBotMedium",
-    "qBotHard",
-    "qBotBrutal"
+    "qBotEasy", "qBotMedium", "qBotHard", "qBotBrutal", "qBotDefend", "CampaignAIPlayer"
 };
 
 constexpr int kEnemyAIOptionCount = sizeof(kEnemyAIClasses) / sizeof(kEnemyAIClasses[0]);
 }
 
 // Static member definitions
+int HouseChoiceMenu::s_house = HOUSE_ATREIDES;
+bool HouseChoiceMenu::s_online = false;
+bool HouseChoiceMenu::s_singleMission = false;
+bool HouseChoiceMenu::s_publicGame = false;
+int HouseChoiceMenu::s_startLevel = 1;
 int HouseChoiceMenu::s_supportBotIndex = 0;
 int HouseChoiceMenu::s_enemyAIIndex = 0;
 SettingsClass::GameOptionsClass HouseChoiceMenu::s_currentGameOptions;
 
-HouseChoiceMenu::HouseChoiceMenu() : MenuBase()
+HouseChoiceMenu::HouseChoiceMenu(bool online, bool keepRules) : MenuBase()
 {
+    s_online = online;
     currentHouseChoiceScrollPos = 0;
-    s_currentGameOptions = effectiveGameOptions;  // Use mod-aware effective options
+    if(!keepRules) s_currentGameOptions = effectiveGameOptions;
 
     // set up window
     int xpos = std::max(0,(getRendererWidth() - 640)/2);
-    int ypos = std::max(0,(getRendererHeight() - 560)/2);
+    int ypos = std::max(0,(getRendererHeight() - 480)/2);
 
-    setCurrentPosition(xpos,ypos,640,560);
+    setCurrentPosition(xpos,ypos,640,480);
 
     setTransparentBackground(true);
 
     setWindowWidget(&windowWidget);
 
 
-    selectYourHouseLabel.setTexture(pGFXManager->getUIGraphic(UI_SelectYourHouseLarge));
-    windowWidget.addWidget(&selectYourHouseLabel, Point(0,0), Point(100, 640));
+    titleLabel.setText(_("Campaign"));
+    titleLabel.setTextColor(COLOR_WHITE);
+    titleLabel.setTextFontSize(20);
+    titleLabel.setAlignment(Alignment_HCenter);
+    windowWidget.addWidget(&titleLabel, Point(0,0), Point(640,26));
+    connectionDropDown.addEntry(_("Offline"), 0);
+    connectionDropDown.addEntry(_("Online co-op"), 1);
+    connectionDropDown.setSelectedItem(s_online ? 1 : 0);
+    connectionDropDown.setOnSelectionChange([this](bool) { s_online = connectionDropDown.getSelectedIndex() == 1; updateConnection(); });
+    windowWidget.addWidget(&connectionDropDown, Point(48,30), Point(174,24));
+    journeyDropDown.addEntry(_("Full campaign"), 0);
+    journeyDropDown.addEntry(_("Single mission"), 1);
+    journeyDropDown.setSelectedItem(s_singleMission ? 1 : 0);
+    journeyDropDown.setOnSelectionChange([this](bool interactive) { if(interactive) { s_singleMission = journeyDropDown.getSelectedIndex() == 1; populateLevels(); updateConnection(); } });
+    windowWidget.addWidget(&journeyDropDown, Point(232,30), Point(174,24));
+    visibilityDropDown.addEntry(_("Private - invite code"), 0);
+    visibilityDropDown.addEntry(_("Public - anyone"), 1);
+    visibilityDropDown.setSelectedItem(s_publicGame ? 1 : 0);
+    visibilityDropDown.setOnSelectionChange([this](bool) { s_publicGame = visibilityDropDown.getSelectedIndex() == 1; });
+    windowWidget.addWidget(&visibilityDropDown, Point(416,30), Point(176,24));
+    selectedHouseLabel.setTextColor(COLOR_WHITE);
+    selectedHouseLabel.setTextFontSize(12);
+    selectedHouseLabel.setAlignment(Alignment_HCenter);
+    windowWidget.addWidget(&selectedHouseLabel, Point(232,250), Point(176,40));
 
     // set up buttons
     house1Button.setOnClick(std::bind(&HouseChoiceMenu::onHouseButton, this, 0));
-    windowWidget.addWidget(&house1Button, Point(40,108),    Point(168,182));
+    windowWidget.addWidget(&house1Button, Point(40,60),    Point(168,182));
 
     house2Button.setOnClick(std::bind(&HouseChoiceMenu::onHouseButton, this, 1));
-    windowWidget.addWidget(&house2Button, Point(235,108),   Point(168,182));
+    windowWidget.addWidget(&house2Button, Point(235,60),   Point(168,182));
 
     house3Button.setOnClick(std::bind(&HouseChoiceMenu::onHouseButton, this, 2));
-    windowWidget.addWidget(&house3Button, Point(430,108),   Point(168,182));
+    windowWidget.addWidget(&house3Button, Point(430,60),   Point(168,182));
 
     SDL_Texture *pArrowLeft = pGFXManager->getUIGraphic(UI_Herald_ArrowLeftLarge);
     SDL_Texture *pArrowLeftHighlight = pGFXManager->getUIGraphic(UI_Herald_ArrowLeftHighlightLarge);
     houseLeftButton.setTextures(pArrowLeftHighlight, pArrowLeftHighlight, pArrowLeftHighlight);
     houseLeftButton.setOnClick(std::bind(&HouseChoiceMenu::onHouseLeft, this));
     houseLeftButton.setVisible(true);
-    windowWidget.addWidget( &houseLeftButton, Point(320 - getWidth(pArrowLeft) - 85, 360), getTextureSize(pArrowLeft));
+    windowWidget.addWidget( &houseLeftButton, Point(320 - getWidth(pArrowLeft) - 85, 250), getTextureSize(pArrowLeft));
 
     SDL_Texture *pArrowRight = pGFXManager->getUIGraphic(UI_Herald_ArrowRightLarge);
     SDL_Texture *pArrowRightHighlight = pGFXManager->getUIGraphic(UI_Herald_ArrowRightHighlightLarge);
     houseRightButton.setTextures(pArrowRightHighlight, pArrowRightHighlight, pArrowRightHighlight);
     houseRightButton.setOnClick(std::bind(&HouseChoiceMenu::onHouseRight, this));
     houseRightButton.setVisible(true);
-    windowWidget.addWidget( &houseRightButton, Point(320 + 85, 360), getTextureSize(pArrowRight));
+    windowWidget.addWidget( &houseRightButton, Point(320 + 85, 250), getTextureSize(pArrowRight));
 
-    // Add AI options below the house selection and arrows
-    // Position these centered below the arrows (at Y=390)
-    int optionsX = 240;  // Centered at 320 (half of 640) - 80 (half of 160)
-    int optionsY = 390;
-    
-    // AI Support label
-    Label* supportLabel = Label::create(_("AI support: help you fight"));
-    supportLabel->setTextColor(COLOR_WHITE);
-    supportLabel->setTextFontSize(12);
-    supportLabel->setAlignment(Alignment_HCenter);
-    windowWidget.addWidget(supportLabel, Point(optionsX, optionsY - 11), Point(160, 16));
-    
-    // AI Support dropdown (gap increased by 3 pixels = 29 pixel gap total)
-    supportBotDropDown.addEntry(_("AI Support: None"), 0);
-    supportBotDropDown.addEntry(_("AI Support: Easy"), 1);
-    supportBotDropDown.addEntry(_("AI Support: Medium"), 2);
-    supportBotDropDown.addEntry(_("AI Support: Hard"), 3);
-    supportBotDropDown.addEntry(_("AI Support: Brutal"), 4);
+    auto label = [this](const char* text, int x, int y) {
+        auto* item = Label::create(_(text));
+        item->setTextFontSize(12);
+        item->setTextColor(COLOR_WHITE);
+        item->setAlignment(Alignment_Left);
+        windowWidget.addWidget(item, Point(x, y), Point(256, 18));
+    };
+    label("Start from", 48, 294);
+    populateLevels();
+    startLevelDropDown.setOnSelectionChange([this](bool) { s_startLevel = startLevelDropDown.getSelectedEntryIntData(); });
+    windowWidget.addWidget(&startLevelDropDown, Point(48, 315), Point(256, 22));
+    label("Choose a house above, then start below.", 48, 339);
+
+    label("Campaign mod", 48, 365);
+    availableMods = ModManager::instance().listMods();
+    int activeIndex = 0;
+    for(size_t i = 0; i < availableMods.size(); ++i) {
+        const auto& mod = availableMods[i];
+        modDropDown.addEntry(mod.displayName.empty() ? mod.name : mod.displayName, static_cast<int>(i));
+        if(mod.name == ModManager::instance().getActiveModName()) activeIndex = static_cast<int>(i);
+    }
+    modDropDown.setSelectedItem(activeIndex);
+    modDropDown.setOnSelectionChange(std::bind(&HouseChoiceMenu::onModSelectionChanged, this, std::placeholders::_1));
+    windowWidget.addWidget(&modDropDown, Point(48, 386), Point(256, 22));
+    modDescription.setTextFontSize(11);
+    modDescription.setTextColor(COLOR_WHITE);
+    windowWidget.addWidget(&modDescription, Point(48, 411), Point(256, 38));
+    updateModDescription();
+
+    label("AI partner", 336, 294);
+    supportBotDropDown.addEntry(_("None"), 0);
+    supportBotDropDown.addEntry(_("AI Support (Easy)"), 1);
+    supportBotDropDown.addEntry(_("AI Support (Medium)"), 2);
+    supportBotDropDown.addEntry(_("AI Support (Hard)"), 3);
+    supportBotDropDown.addEntry(_("AI Support (Brutal)"), 4);
+    supportBotDropDown.addEntry(_("QuantBot Easy"), 5);
+    supportBotDropDown.addEntry(_("QuantBot Medium"), 6);
+    supportBotDropDown.addEntry(_("QuantBot Hard"), 7);
+    supportBotDropDown.addEntry(_("QuantBot Brutal"), 8);
+    supportBotDropDown.addEntry(_("QuantBot Defend"), 9);
     supportBotDropDown.setSelectedItem(s_supportBotIndex);
     supportBotDropDown.setOnSelectionChange(std::bind(&HouseChoiceMenu::onSupportBotSelectionChanged, this, std::placeholders::_1));
-    windowWidget.addWidget(&supportBotDropDown, Point(optionsX, optionsY + 18), Point(160, 20));
+    windowWidget.addWidget(&supportBotDropDown, Point(336, 315), Point(256, 22));
+    supportDescription.setTextFontSize(10);
+    supportDescription.setTextColor(COLOR_WHITE);
+    supportDescription.setAlignment(Alignment_Left);
+    windowWidget.addWidget(&supportDescription, Point(336, 339), Point(256, 30));
+    onSupportBotSelectionChanged(false);
 
-    // Enemy AI label
-    Label* enemyAILabel = Label::create(_("Enemy AI"));
-    enemyAILabel->setTextColor(COLOR_WHITE);
-    enemyAILabel->setTextFontSize(12);
-    enemyAILabel->setAlignment(Alignment_HCenter);
-    windowWidget.addWidget(enemyAILabel, Point(optionsX, optionsY + 43), Point(160, 16));
-    
-    // Enemy AI dropdown (gap increased by 3 pixels = 29 pixel gap total)
-    enemyAIDropDown.addEntry(_("Enemy AI: Campaign AI"), 0);
-    enemyAIDropDown.addEntry(_("Enemy AI: QuantBot Easy"), 1);
-    enemyAIDropDown.addEntry(_("Enemy AI: QuantBot Medium"), 2);
-    enemyAIDropDown.addEntry(_("Enemy AI: QuantBot Hard"), 3);
-    enemyAIDropDown.addEntry(_("Enemy AI: QuantBot Brutal"), 4);
+    label("Enemy AI", 336, 377);
+    enemyAIDropDown.addEntry(_("QuantBot Easy"), 0);
+    enemyAIDropDown.addEntry(_("QuantBot Medium"), 1);
+    enemyAIDropDown.addEntry(_("QuantBot Hard"), 2);
+    enemyAIDropDown.addEntry(_("QuantBot Brutal"), 3);
+    enemyAIDropDown.addEntry(_("QuantBot Defend"), 4);
+    enemyAIDropDown.addEntry(_("Campaign AI"), 5);
     enemyAIDropDown.setSelectedItem(s_enemyAIIndex);
     enemyAIDropDown.setOnSelectionChange(std::bind(&HouseChoiceMenu::onEnemyAISelectionChanged, this, std::placeholders::_1));
-    windowWidget.addWidget(&enemyAIDropDown, Point(optionsX, optionsY + 72), Point(160, 20));
+    windowWidget.addWidget(&enemyAIDropDown, Point(336, 398), Point(256, 22));
+    enemyDescription.setTextFontSize(10);
+    enemyDescription.setTextColor(COLOR_WHITE);
+    enemyDescription.setAlignment(Alignment_Left);
+    windowWidget.addWidget(&enemyDescription, Point(336, 423), Point(256, 30));
+    onEnemyAISelectionChanged(false);
 
-    // Game Options button
-    gameOptionsButton.setText(_("Game Options"));
+    gameOptionsButton.setText(_("Game Rules"));
     gameOptionsButton.setOnClick(std::bind(&HouseChoiceMenu::onGameOptions, this));
-    windowWidget.addWidget(&gameOptionsButton, Point(optionsX, optionsY + 100), Point(160, 20));
-
+    windowWidget.addWidget(&gameOptionsButton, Point(184, 455), Point(128, 24));
+    hostCoopButton.setOnClick([this]() { quit(s_house); });
+    windowWidget.addWidget(&hostCoopButton, Point(448,455), Point(144,24));
+    backButton.setText(_("Back"));
+    backButton.setOnClick([this] { quit(); });
+    windowWidget.addWidget(&backButton, Point(48,455), Point(128,24));
+    loadButton.setText(_("Load Save"));
+    loadButton.setOnClick([]() { showGameLibrary(); });
+    windowWidget.addWidget(&loadButton, Point(320,455), Point(120,24));
+    updateConnection();
     updateHouseChoice();
 }
 
@@ -173,8 +235,7 @@ void HouseChoiceMenu::onChildWindowClose(Window* pChildWindow) {
     GameOptionsWindow* pGameOptionsWindow = dynamic_cast<GameOptionsWindow*>(pChildWindow);
     if(pGameOptionsWindow != nullptr) {
         s_currentGameOptions = pGameOptionsWindow->getGameOptions();
-        // Choices made here become the new defaults, the same as in Options.
-        saveGameOptionsAsDefaults(s_currentGameOptions);
+        // Rules stay local unless Remember is selected in the rules dialog.
     }
 }
 
@@ -185,11 +246,33 @@ void HouseChoiceMenu::onGameOptions() {
 void HouseChoiceMenu::onSupportBotSelectionChanged(bool /*interactive*/) {
     int entry = supportBotDropDown.getSelectedEntryIntData();
     s_supportBotIndex = (entry >= 0 && entry < kSupportOptionCount) ? entry : 0;
+    const char* descriptions[] = {
+        "You control economy, building and combat.",
+        "AI builds and manages your economy.\nYou command combat units.",
+        "AI builds and manages your economy.\nYou command combat units.",
+        "AI builds and manages your economy.\nYou command combat units.",
+        "AI builds and manages your economy.\nYou command combat units.",
+        "Full control: cautious attacks, home reserves.\nBuilds economy and covers power demand.",
+        "Full control: balanced attacks and repairs.\nBuilds economy and covers power demand.",
+        "Full control: larger armies and air raids.\nKeeps a small home reserve.",
+        "Full control: strongest army and air raids.\nCommits most troops to combat.",
+        "Builds your economy and defends your base."
+    };
+    supportDescription.setText(_(descriptions[s_supportBotIndex]));
 }
 
 void HouseChoiceMenu::onEnemyAISelectionChanged(bool /*interactive*/) {
     int entry = enemyAIDropDown.getSelectedEntryIntData();
     s_enemyAIIndex = (entry >= 0 && entry < kEnemyAIOptionCount) ? entry : 0;
+    const char* descriptions[] = {
+        "Small waves, one enemy house at a time.\nLong recovery breaks; supplies its power.",
+        "Larger waves, one enemy house at a time.\nModerate breaks; supplies its power.",
+        "Two houses can attack together.\nFlanking, air raids and shorter breaks.",
+        "All enemy houses can attack together.\nLargest waves and shortest breaks.",
+        "Builds and defends without main assaults.",
+        "Uses the original campaign AI behaviour."
+    };
+    enemyDescription.setText(_(descriptions[s_enemyAIIndex]));
 }
 
 void HouseChoiceMenu::onHouseButton(int button) {
@@ -235,12 +318,31 @@ void HouseChoiceMenu::onHouseButton(int button) {
             break;
     }
 
-    int ret = HouseChoiceInfoMenu(selectedHouse).showMenu();
-    quit(ret == MENU_QUIT_DEFAULT ? MENU_QUIT_DEFAULT : selectedHouse);
+    s_house = selectedHouse;
+    updateHouseChoice();
 }
 
 
+void HouseChoiceMenu::populateLevels() {
+    startLevelDropDown.clearAllEntries();
+    s_startLevel = std::clamp(s_startLevel, 1, s_singleMission ? 22 : 9);
+    for(int i = 1; i <= (s_singleMission ? 22 : 9); ++i)
+        startLevelDropDown.addEntry((s_singleMission ? _("Mission ") : _("Level ")) + std::to_string(i), i);
+    startLevelDropDown.setSelectedItem(s_startLevel - 1);
+}
+
+void HouseChoiceMenu::updateConnection() {
+    hostCoopButton.setText(s_online ? _("Create Lobby") : s_singleMission ? _("Start Mission") : _("Start Campaign"));
+    visibilityDropDown.setEnabled(s_online);
+    supportBotDropDown.setEnabled(!s_online);
+    if(s_online) supportDescription.setText(_("Two people share one house and army.\nYour partner joins in the lobby."));
+    else onSupportBotSelectionChanged(false);
+}
+
 void HouseChoiceMenu::updateHouseChoice() {
+    if(!isHouseAvailable(static_cast<HOUSETYPE>(s_house))) s_house = HOUSE_ATREIDES;
+    selectedHouseLabel.setText(_("Selected:") + std::string("\n") + getHouseNameByNumber(static_cast<HOUSETYPE>(s_house)));
+
     // House1 button
     house1Button.setTextures(pGFXManager->getUIGraphic(UI_Herald_ColoredLarge, houseOrder[currentHouseChoiceScrollPos+0]));
 
@@ -265,4 +367,34 @@ void HouseChoiceMenu::onHouseRight()
         currentHouseChoiceScrollPos++;
         updateHouseChoice();
     }
+}
+
+void HouseChoiceMenu::updateModDescription() {
+    const int index = modDropDown.getSelectedEntryIntData();
+    if(index < 0 || index >= static_cast<int>(availableMods.size())) return;
+    const auto& mod = availableMods[index];
+    const std::string description = mod.description.empty()
+        ? _("Use this mod's campaign content and rules.") : mod.description;
+    modDescription.setText(description);
+}
+
+void HouseChoiceMenu::onModSelectionChanged(bool interactive) {
+    if(!interactive) return;
+    const int index = modDropDown.getSelectedEntryIntData();
+    if(index < 0 || index >= static_cast<int>(availableMods.size())) return;
+    auto& manager = ModManager::instance();
+    if(availableMods[index].name != manager.getActiveModName()) {
+        if(!manager.setActiveMod(availableMods[index].name)) {
+            for(size_t i = 0; i < availableMods.size(); ++i)
+                if(availableMods[i].name == manager.getActiveModName())
+                    modDropDown.setSelectedItem(static_cast<int>(i));
+            openWindow(MsgBox::create(_("Could not load that mod. The previous mod is still selected.")));
+        } else {
+            effectiveGameOptions = manager.loadEffectiveGameOptions(settings.gameOptions);
+            s_currentGameOptions = effectiveGameOptions;
+        }
+    }
+    currentHouseChoiceScrollPos = std::min(currentHouseChoiceScrollPos, getMaxHouseScrollPos());
+    updateHouseChoice();
+    updateModDescription();
 }

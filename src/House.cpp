@@ -1,4 +1,3 @@
-#include <dunecity/RoadMaintenancePolicy.h>
 #include <dunecity/PowerRules.h>
 #include <players/AIDecisionLog.h>
 /*
@@ -246,6 +245,31 @@ void House::save(OutputStream& stream) const {
 
 
 
+void House::configureCoopPlayers(const std::vector<std::pair<std::string, std::string>>& desired) {
+    if(desired.size() != 2 || desired.front().second != HUMANPLAYERCLASS || players.empty()
+       || dynamic_cast<HumanPlayer*>(players.front().get()) == nullptr)
+        THROW(std::runtime_error, "Co-op requires a saved human house and two controllers.");
+    // Keep the first human's tutorial and statistics state and stable player ID.
+    currentGame->unregisterPlayer(players.front().get());
+    players.front()->setPlayername(desired.front().first);
+    currentGame->registerPlayer(players.front().get());
+    if(players.size() == 2 && players.back()->getPlayerclass() == desired.back().second) {
+        currentGame->unregisterPlayer(players.back().get());
+        players.back()->setPlayername(desired.back().first);
+        currentGame->registerPlayer(players.back().get());
+        ai = false;
+        return;
+    }
+    while(players.size() > 1) {
+        currentGame->unregisterPlayer(players.back().get());
+        players.pop_back();
+    }
+    const auto* factory = PlayerFactory::getByPlayerClass(desired.back().second);
+    if(!factory) THROW(std::runtime_error, "Unknown co-op controller.");
+    addPlayer(factory->create(this, desired.back().first));
+    ai = false;
+}
+
 void House::addPlayer(std::unique_ptr<Player> newPlayer) {
     Player* pNewPlayer = newPlayer.get();
 
@@ -256,6 +280,11 @@ void House::addPlayer(std::unique_ptr<Player> newPlayer) {
     }
 
     players.push_back(std::move(newPlayer));
+    if(isCoopGameType(currentGame->gameType)) {
+        ai = std::none_of(players.begin(), players.end(), [](const auto& player) {
+            return dynamic_cast<HumanPlayer*>(player.get()) != nullptr;
+        });
+    }
 
     Uint8 newPlayerID = static_cast<Uint8>((houseID << 4) | players.size());
     pNewPlayer->playerID = newPlayerID;
@@ -1013,7 +1042,7 @@ StructureBase* House::placeStructure(Uint32 builderID, int itemID, int xPos, int
                         Tile* t = currentGameMap->getTile(tx, ty);
                         if (t->hasAGroundObject()) continue;
                         if (!DuneCity::isCityBuildableTerrain(t->getType())) continue;
-                        t->setOwner(DuneCity::roadOwnerAfterPlacement(t->isRoad(), t->getOwner(), getHouseID()));
+                        // Road overlay preserves the underlying tile/concrete owner.
                         t->setRoad(true);
                     }
                 }

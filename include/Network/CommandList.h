@@ -23,6 +23,7 @@
 #include <misc/SDL2pp.h>
 
 #include <Command.h>
+#include <CommandValidation.h>
 
 #include <vector>
 
@@ -38,6 +39,12 @@ public:
         explicit CommandListEntry(InputStream& stream) {
             cycle = stream.readUint32();
             Uint32 numCommands = stream.readUint32();
+            if(!CommandValidation::isAcceptableCommandCountPerEntry(numCommands)) {
+                throw InputStream::error("CommandList: too many commands in one cycle entry!");
+            }
+            // A command is at least playerID + commandID + parameter count = 9 bytes.
+            stream.requireReadableElements(numCommands, 9);
+            commands.reserve(numCommands);
             for(Uint32 i = 0; i < numCommands; i++) {
                 commands.push_back(Command(stream));
             }
@@ -60,8 +67,22 @@ public:
 
     explicit CommandList(InputStream& stream) {
         Uint32 numCommandListEntries = stream.readUint32();
+        if(!CommandValidation::isAcceptableCommandListEntryCount(numCommandListEntries)) {
+            throw InputStream::error("CommandList: too many command list entries!");
+        }
+        // One entry is at least cycle + command count = 8 bytes.
+        stream.requireReadableElements(numCommandListEntries, 8);
+        commandList.reserve(numCommandListEntries);
+
+        std::size_t totalCommands = 0;
         for(Uint32 i = 0; i < numCommandListEntries; i++) {
             commandList.emplace_back(stream);
+            // The per-entry and per-list bounds multiply, so the aggregate is bounded too:
+            // one packet may not carry more commands than a real session ever produces.
+            totalCommands += commandList.back().commands.size();
+            if(!CommandValidation::isAcceptableCommandTotal(totalCommands)) {
+                throw InputStream::error("CommandList: too many commands in one packet!");
+            }
         }
     }
 

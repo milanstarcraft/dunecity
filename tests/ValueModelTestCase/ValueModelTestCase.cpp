@@ -254,7 +254,7 @@ TEST_CASE("Pollution: DuneCity scales industrial emission by level (divergence)"
     REQUIRE(getPollutionEmission(Structure_ZoneIndustrial, 3) == 50);
     // At max level we hit SC's flat-50 number, so high-density I lines up
     // with SC's worst-case noise.
-    REQUIRE(getPollutionEmission(Structure_HeavyFactory, 3) == 50);
+    REQUIRE(getPollutionEmission(Structure_HeavyFactory, 3) == 25); // capped medium I, including old saves
 }
 
 TEST_CASE("Pollution: residential and commercial are clean at every level",
@@ -468,11 +468,10 @@ TEST_CASE("Tax setter feeds annual revenue computation",
           "[tax][setter][integration]") {
     CitySimulation sim;
     sim.setCityTax(10);
-    // Per-citizen contribution is 200/3 credits/year at 100% tax rate.
-    // Formula: pop*200*rate/(100*3). 1000 pop × 10% tax: 1000*200*10/300 = 6666.
-    REQUIRE(computeAnnualTaxRevenue(1000, sim.getCityTax()) == 6666);
+    //1000 tax-base eighths =125 Micropolis tax population at land value128.
+    REQUIRE(computeAnnualTaxRevenue(1000, sim.getCityTax()) == 1866);
     sim.setCityTax(15);
-    REQUIRE(computeAnnualTaxRevenue(1000, sim.getCityTax()) == 10000);
+    REQUIRE(computeAnnualTaxRevenue(1000, sim.getCityTax()) == 2800);
 }
 
 // =============================================================================

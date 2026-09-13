@@ -181,6 +181,7 @@ target_sources(dunecity
         GUI/TextView.cpp
         GUI/RadioButtonManager.cpp
         GUI/dune/ChatManager.cpp
+        GUI/dune/FeedbackWindow.cpp
         GUI/dune/CityBudgetWindow.cpp
         GUI/dune/DuneStyle.cpp
         GUI/dune/GameOptionsWindow.cpp
@@ -195,6 +196,7 @@ target_sources(dunecity
 
         # Menu
         Menu/MenuBase.cpp
+        Menu/PlaySetup.cpp
         Menu/MainMenu.cpp
         Menu/DisplayMenu.cpp
         Menu/SinglePlayerMenu.cpp
@@ -207,6 +209,7 @@ target_sources(dunecity
         Menu/HouseChoiceMenu.cpp
         Menu/MentatMenu.cpp
         Menu/MultiPlayerMenu.cpp
+        Menu/CrossplayMenu.cpp
         Menu/BriefingMenu.cpp
         Menu/HouseChoiceInfoMenu.cpp
         Menu/MentatHelp.cpp
@@ -221,6 +224,13 @@ target_sources(dunecity
         # Network
         Network/LANGameFinderAndAnnouncer.cpp
         Network/NetworkManager.cpp
+        Network/GamePayloadRouter.cpp
+        Network/RoomRelayClient.cpp
+        Network/RoomAdmissionClient.cpp
+        Network/FeedbackClient.cpp
+
+        Network/DirectRoomTransport.cpp
+        Network/BoundedHttpClient.cpp
         Network/ENetHttp.cpp
         Network/MetaServerClient.cpp
         Network/VersionChecker.cpp
@@ -235,6 +245,7 @@ target_sources(dunecity
         players/CampaignAIPlayer.cpp
         players/AIDecisionLog.cpp
         players/QuantBot.cpp
+        players/QuantBotCampaign.cpp
         players/Mentat.cpp
         players/MentatBuildOrderMentat.cpp
         players/QuantBotConfig.cpp
@@ -453,20 +464,91 @@ if(NOT EMSCRIPTEN)
     endif()
 endif()
 
+# The crossplay relay transport has one implementation per platform. Only the matching one is
+# compiled: each file is also guarded internally, but listing them conditionally keeps the other
+# platform's headers (libcurl, emscripten/websocket.h) out of the build entirely.
+#
+# The HTTPS polling transport is split the same way, plus a platform-independent state machine
+# that both backends share. That file is where the sequencing, retry and pacing rules live, and
+# it is the one tests/RelayHttpTransportTestCase drives against a scripted backend.
+target_sources(dunecity PRIVATE Network/RelayHttpTransport.cpp)
+
+# The direct peer-to-peer transport has one backend per runtime and they have to interoperate:
+# natively a real libdatachannel data channel, in the browser P2PKit's RTCTransport reached
+# through platform/web/src/dune-direct-bridge.ts. The wire format they share is
+# include/Network/P2PWireFraming.h, which is header-only precisely so the tests can drive the
+# real encoder and decoder without either backend.
+if(EMSCRIPTEN)
+    target_sources(dunecity PRIVATE
+        Network/RelayWebSocketEmscripten.cpp
+        Network/RelayHttpTransportEmscripten.cpp
+        Network/DirectPeerConnectionEmscripten.cpp)
+else()
+    target_sources(dunecity PRIVATE
+        Network/RelayWebSocketCurl.cpp
+        Network/RelayHttpTransportCurl.cpp
+        Network/DirectPeerConnectionLibdatachannel.cpp)
+
+    if(DUNECITY_DIRECT_P2P)
+        target_link_libraries(dunecity PRIVATE ${DUNECITY_LIBDATACHANNEL_TARGET})
+        target_compile_definitions(dunecity PRIVATE DUNECITY_HAVE_LIBDATACHANNEL)
+    else()
+        message(STATUS "libdatachannel is disabled; this build cannot play directly online")
+    endif()
+
+    # libcurl gained its WebSocket API in 7.86. Older libcurl still builds - the transport
+    # compiles out and the game says online play is unavailable - but it is worth being loud
+    # about, because the macOS system libcurl is also built without the ws/wss handlers even
+    # when its headers are new enough. Configure with -DCURL_ROOT=/opt/homebrew/opt/curl on
+    # macOS to pick up a libcurl that has them.
+    if(CURL_VERSION_STRING AND CURL_VERSION_STRING VERSION_LESS "7.86.0")
+        message(STATUS "libcurl ${CURL_VERSION_STRING} has no WebSocket API; "
+                       "crossplay will be unavailable in this build")
+    else()
+        message(STATUS "libcurl ${CURL_VERSION_STRING} provides the WebSocket API used by crossplay")
+    endif()
+endif()
+
 # Link libraries
 if(EMSCRIPTEN)
     set_target_properties(dunecity PROPERTIES SUFFIX ".html")
+    # The production shell loads these external files before the generated
+    # runtime. Include them in raw CMake builds as well as packaged releases.
+    foreach(WEB_SHELL_ASSET shell.js shell.css)
+        configure_file("${CMAKE_SOURCE_DIR}/web/${WEB_SHELL_ASSET}"
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${WEB_SHELL_ASSET}" COPYONLY)
+    endforeach()
+
+    # The direct-play bridge bundle. It is generated from platform/web/src/dune-direct-bridge.ts
+    # and the vendored P2PKit source by tools/p2pkit-build, and committed, so a clean clone builds
+    # without npm at configure time. Copied, never built here; if it is missing the game still
+    # builds and simply reports that this page cannot open direct connections.
+    if(EXISTS "${CMAKE_SOURCE_DIR}/platform/web/p2p-direct.js")
+        configure_file("${CMAKE_SOURCE_DIR}/platform/web/p2p-direct.js"
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/p2p-direct.js" COPYONLY)
+    else()
+        message(STATUS "platform/web/p2p-direct.js is absent; "
+                       "the browser build will have no direct-play bridge")
+    endif()
     set_property(TARGET dunecity APPEND PROPERTY LINK_DEPENDS
         "${CMAKE_SOURCE_DIR}/web/shell.html")
     target_compile_options(dunecity PRIVATE
         "SHELL:-sUSE_SDL=2"
         "SHELL:-sUSE_SDL_MIXER=2"
         "SHELL:-sUSE_SDL_TTF=2"
+        "SHELL:-fexceptions"
+        "SHELL:-sDISABLE_EXCEPTION_CATCHING=0"
     )
     target_link_options(dunecity PRIVATE
+        # Keep Release C++ compilation at -O3, but use the -O2 wasm
+        # optimizer pipeline. Binaryen's -O3 local2Stack pass grows prohibitively
+        # on this Asyncify build (over 20 minutes / 12 GB in the release probe).
+        "$<$<CONFIG:Release>:-O2>"
         "SHELL:-sUSE_SDL=2"
         "SHELL:-sUSE_SDL_MIXER=2"
         "SHELL:-sUSE_SDL_TTF=2"
+        "SHELL:-fexceptions"
+        "SHELL:-sDISABLE_EXCEPTION_CATCHING=0"
         "SHELL:-sASYNCIFY=1"
         "SHELL:-sALLOW_MEMORY_GROWTH=1"
         "SHELL:-sINITIAL_MEMORY=268435456"
@@ -476,11 +558,26 @@ if(EMSCRIPTEN)
         "SHELL:-sEXIT_RUNTIME=0"
         "SHELL:-sEXPORTED_RUNTIME_METHODS=['FS']"
         "SHELL:-lidbfs.js"
+        # Crossplay in the browser: the WebSocket API for the gameplay connection and the Fetch
+        # API for room admission. Both are asynchronous; no synchronous request is used.
+        "SHELL:-lwebsocket.js"
+        "SHELL:-sFETCH=1"
         "SHELL:--shell-file ${CMAKE_SOURCE_DIR}/web/shell.html"
         "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/data@/"
         "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/config@/config"
         "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/imported_sprites@/imported_sprites"
+        "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/mods/Tornie@/mods/Tornie"
+        "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/mods/Dune2R@/mods/Dune2R"
+        # Keep the Dune2R mod/catalog available; its optional art downloads
+        # separately, just as in the native packages.
+        "SHELL:--exclude-file ${CMAKE_SOURCE_DIR}/mods/Dune2R/graphics_hd/units"
+        "SHELL:--exclude-file ${CMAKE_SOURCE_DIR}/mods/Dune2R/graphics_compact/objpics"
     )
+    file(GLOB_RECURSE WEB_MOD_FILES CONFIGURE_DEPENDS
+        "${CMAKE_SOURCE_DIR}/mods/Tornie/*"
+        "${CMAKE_SOURCE_DIR}/mods/Dune2R/*")
+    list(FILTER WEB_MOD_FILES EXCLUDE REGEX "/graphics_hd/units/|/graphics_compact/objpics/")
+    set_property(TARGET dunecity APPEND PROPERTY LINK_DEPENDS ${WEB_MOD_FILES})
 else()
     # vcpkg provides modern CMake targets for SDL2.
     target_link_libraries(dunecity

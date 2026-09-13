@@ -22,6 +22,12 @@
 #include <Network/ENetPacketOStream.h>
 #include <Network/ChangeEventList.h>
 #include <Network/CommandList.h>
+#include <Network/NetworkPacketTypes.h>
+#include <Network/NetworkPacketPolicy.h>
+#include <Network/GamePayloadRouter.h>
+#include <Network/DirectRoomTransport.h>
+#include <Network/RoomRelayClient.h>
+#include <Network/RoomSessionTransport.h>
 
 #include <Network/LANGameFinderAndAnnouncer.h>
 #include <Network/MetaServerClient.h>
@@ -37,60 +43,9 @@
 #include <functional>
 #include <stdarg.h>
 
-#define NETWORKDISCONNECT_QUIT              1
-#define NETWORKDISCONNECT_TIMEOUT           2
-#define NETWORKDISCONNECT_PLAYER_EXISTS     3
-#define NETWORKDISCONNECT_GAME_FULL         4
-#define NETWORKDISCONNECT_PROTOCOL_MISMATCH 5
-
-#define NETWORKPACKET_UNKNOWN               0
-#define NETWORKPACKET_CONNECT               1
-#define NETWORKPACKET_DISCONNECT            2
-#define NETWORKPACKET_PEER_CONNECTED        3
-#define NETWORKPACKET_SENDGAMEINFO          4
-#define NETWORKPACKET_SENDNAME              5
-#define NETWORKPACKET_CHATMESSAGE           6
-#define NETWORKPACKET_CHANGEEVENTLIST       7
-#define NETWORKPACKET_STARTGAME             8
-#define NETWORKPACKET_COMMANDLIST           9
-#define NETWORKPACKET_SELECTIONLIST         10
-#define NETWORKPACKET_CONFIG_HASH           11
-#define NETWORKPACKET_SETPATHBUDGET         12  // Phase 1.4: Budget negotiation
-#define NETWORKPACKET_CLIENTSTATS           13  // Multiplayer: Client performance stats
-#define NETWORKPACKET_MOD_INFO              14  // Host -> Client: mod name + checksums
-#define NETWORKPACKET_MOD_REQUEST           15  // Client -> Host: request mod files
-#define NETWORKPACKET_MOD_CHUNK             16  // Host -> Client: mod file chunk
-#define NETWORKPACKET_MOD_COMPLETE          17  // Host -> Client: transfer complete
-#define NETWORKPACKET_MOD_ACK               18  // Client -> Host: acknowledge mod sync complete
-#define NETWORKPACKET_KEEPALIVE             19  // Periodic ping to keep NAT mappings alive
-
-// Network protocol version - increment when packet formats change
-// Version 2: Added simMsAvg to NETWORKPACKET_CLIENTSTATS (5 fields instead of 4)
-// Version 3: Added mod transfer packets (MOD_INFO, MOD_REQUEST, MOD_CHUNK, MOD_COMPLETE)
-// Version 4: Fixed nine-house deterministic state and versioned visibility storage
-#define NETWORK_PROTOCOL_VERSION            4
-
-/**
- * Reject an incompatible config-hash handshake and dispatch its disconnect cause.
- * Returns true when the peer must be rejected.
- */
-template<typename DisconnectFunction>
-inline bool rejectIncompatibleNetworkProtocol(Uint32 peerProtocolVersion, DisconnectFunction&& disconnect) {
-    if(peerProtocolVersion == NETWORK_PROTOCOL_VERSION) return false;
-    disconnect(NETWORKDISCONNECT_PROTOCOL_MISMATCH);
-    return true;
-}
-
-template<typename DisconnectFunction>
-inline bool rejectIncompatibleGameVersion(const std::string& peer, const std::string& local, DisconnectFunction&& disconnect) {
-    if (peer == local) return false;
-    disconnect(NETWORKDISCONNECT_PROTOCOL_MISMATCH);
-    return true;
-}
-
-// Mod transfer limits
-#define MAX_MOD_TRANSFER_SIZE   (10 * 1024 * 1024)  // 10MB max mod size
-#define MOD_CHUNK_SIZE          (64 * 1024)          // 64KB per chunk
+// rejectIncompatibleNetworkProtocol() and rejectIncompatibleGameVersion() moved to
+// Network/NetworkPacketPolicy.h so both transports can use them; they are still reachable
+// through this header.
 
 #define AWAITING_CONNECTION_TIMEOUT     5000
 
@@ -98,12 +53,146 @@ class GameInitSettings;
 
 class NetworkManager {
 public:
+    /// Which transport carries this session.
+    enum class Transport {
+        EnetMesh,   ///< legacy UDP mesh with LAN discovery, the metaserver and UPnP
+        RoomRelay,  ///< legacy crossplay through the room relay over one outbound WebSocket
+        /**
+            Crossplay played directly between the players over WebRTC data channels.
+
+            HTTPS is used to find the room and introduce the players to each other and for
+            nothing else: no gameplay byte passes through a server. This is what Play Online
+            starts now; RoomRelay remains for older tests and releases.
+        */
+        DirectP2P
+    };
+
+    /// Legacy ENet mesh session.
     NetworkManager(int port, const std::string& metaserver);
+
+    /**
+        Room session, relayed or direct.
+
+        Deliberately creates no ENet host and starts no LAN discovery, metaserver thread or UPnP
+        mapping. None of those work in a browser, and a room session has no use for any of them
+        anywhere: a relay session opens one outbound WebSocket, and a direct session opens no
+        server socket at all - the data channels are negotiated outbound.
+    */
+    explicit NetworkManager(Transport transport);
+
     NetworkManager(const NetworkManager& o) = delete;
     ~NetworkManager();
 
     bool isServer() const { return bIsServer; };
     bool isLANServer() const { return bLANServer; };
+
+    void setPublicRelayRoom(bool value) { publicRelayRoom = value; }
+    bool isPublicRelayRoom() const { return publicRelayRoom; }
+    /// True for both room transports: this session has a room, a grant and logical peer ids.
+    bool isRoomSession() const {
+        return transport == Transport::RoomRelay || transport == Transport::DirectP2P;
+    }
+    /// Kept for call sites that mean "a room session rather than the ENet mesh".
+    bool isRelaySession() const { return isRoomSession(); }
+    /// True only when gameplay travels straight between the players.
+    bool isDirectSession() const { return transport == Transport::DirectP2P; }
+
+    /**
+        Relay v1 carries bundled, matching content only: mod transfer packets are refused by the
+        relay, so the lobby must not wait for mod acknowledgements on that transport.
+    */
+    bool supportsModTransfer() const { return transport == Transport::EnetMesh; }
+
+    /**
+        Whether every player is directly connected to every other player.
+
+        True on the transports where the question does not arise. On a direct session it is the
+        start barrier: the host having a channel to each guest does not mean the guests can reach
+        each other, and starting across a missing guest-to-guest link loses that pair's commands
+        silently.
+    */
+    bool isMeshReady() const;
+
+    /// A player-facing sentence naming what the mesh is waiting for, or empty when it is ready.
+    std::string getMeshBlockedReason() const;
+
+    /**
+        Starts the relay session with a grant that HTTPS admission already produced.
+        \param  config  session parameters
+        \param  error   set to a player-facing reason on failure
+        \return true if the session is connecting
+    */
+    bool startRelaySession(const RoomRelayClient::Config& config, std::string& error);
+
+    /**
+        Starts a direct session with a grant that HTTPS admission already produced.
+
+        The grant is redeemed at the signaling service, which introduces the players to each
+        other. After that the service carries nothing, and the match survives losing it.
+    */
+    bool startDirectSession(const DirectRoomTransport::Config& config, std::string& error);
+
+    /// The room session, or nullptr on the ENet transport.
+    RoomSessionTransport* getRelayClient() { return pRelayClient.get(); }
+    const RoomSessionTransport* getRelayClient() const { return pRelayClient.get(); }
+
+    /// The direct session, or nullptr when this session is not a direct one.
+    DirectRoomTransport* getDirectTransport() {
+        return transport == Transport::DirectP2P
+                   ? static_cast<DirectRoomTransport*>(pRelayClient.get()) : nullptr;
+    }
+    const DirectRoomTransport* getDirectTransport() const {
+        return transport == Transport::DirectP2P
+                   ? static_cast<const DirectRoomTransport*>(pRelayClient.get()) : nullptr;
+    }
+
+    /// The room code a player can pass to a friend, or empty when there is no relay session.
+    std::string getRoomCode() const {
+        return pRelayClient ? pRelayClient->roomCode() : std::string();
+    }
+
+    /// The outcome of comparing every relay peer's content with ours.
+    enum class ContentCheck {
+        Match,          ///< everybody reported, and everybody agrees
+        AwaitingPeer,   ///< somebody has not reported yet; try again shortly
+        Mismatch        ///< somebody reported content this transport cannot reconcile
+    };
+
+    /**
+        Checks every relay peer's reported content against ours, for the host to call before it
+        starts a match.
+
+        The per-message check happens when a peer's hashes arrive, but the lobby lets the host
+        pick a different mod afterwards, so the comparison has to be made again against what is
+        actually about to be played. A peer that has not reported yet is reported separately from
+        one that disagrees: waiting is recoverable, disagreeing is not.
+
+        \param  quantBotHash    our current QuantBot config hash
+        \param  objectDataHash  our current object data hash
+        \param  gameVersion     our build version
+        \param  reason          set to a player-facing explanation unless everybody matches
+    */
+    ContentCheck checkRelayContent(const std::string& quantBotHash,
+                                   const std::string& objectDataHash,
+                                   const std::string& gameVersion,
+                                   std::string& reason) const;
+
+    /**
+        Sends a bounded diagnostic to the room. Carried in the relay envelope, never as a game
+        packet, so the ENet wire format and NETWORK_PROTOCOL_VERSION are untouched.
+        \return false if there is no relay session or the payload was refused
+    */
+    bool sendRelayDiagnostic(RoomRelay::DiagnosticKind kind, const std::uint8_t* payload,
+                             std::size_t length);
+
+    /**
+        Sets the function called when a diagnostic arrives from another peer.
+        \param  callback    function(senderName, kind, payload, length)
+    */
+    void setOnReceiveRelayDiagnostic(
+        std::function<void (const std::string&, std::uint8_t, const std::uint8_t*, std::size_t)> callback) {
+        pOnReceiveRelayDiagnostic = std::move(callback);
+    }
 
     void startServer(bool bLANServer, const std::string& serverName, const std::string& playerName, GameInitSettings* pGameInitSettings, int numPlayers, int maxPlayers);
     void updateServer(int numPlayers);
@@ -123,14 +212,30 @@ public:
 
     void sendConfigHash(const std::string& quantBotHash, const std::string& objectDataHash, const std::string& gameVersion);
 
-    void sendStartGame(unsigned int timeLeft);
+    bool sendStartGame(unsigned int timeLeft);
+    void sendCoopMission(const GameInitSettings& settings);
+    std::unique_ptr<GameInitSettings> takeCoopMission();
 
+    /**
+        Called on every peer (host and clients) when the match starts. Besides the simulation
+        seed this freezes the session phase: lobby-only packets, including renames and mod
+        transfers, stop being accepted from this point on.
+        \param  seed    the shared simulation seed
+    */
+    void beginSimulation(Uint32 seed);
     void sendCommandList(const CommandList& commandList);
 
     void sendSelectedList(const std::set<Uint32>& selectedList, int groupListIndex = -1);
 
     std::list<std::string> getConnectedPeers() const {
         std::list<std::string> peerNameList;
+
+        if(pRelayClient) {
+            for(const RoomSessionTransport::Peer& peer : pRelayClient->peers()) {
+                peerNameList.push_back(peer.name);
+            }
+            return peerNameList;
+        }
 
         for(const ENetPeer* pPeer : peerList) {
             PeerData* peerData = static_cast<PeerData*>(pPeer->data);
@@ -142,7 +247,13 @@ public:
         return peerNameList;
     }
 
+    /// Largest ENet peer RTT; for relay sessions this is only the local heartbeat RTT.
+    /// Relay heartbeat timing does not measure or bound the complete peer delivery path.
     int getMaxPeerRoundTripTime();
+
+    /// Local relay heartbeat RTT in milliseconds; zero before the first sample or without a relay.
+    Uint32 getRelayServerRoundTripTimeMs() const;
+    bool isRelayHttpPollingSession() const;
 
     LANGameFinderAndAnnouncer* getLANGameFinderAndAnnouncer() {
         return pLANGameFinderAndAnnouncer.get();
@@ -170,10 +281,12 @@ public:
 
 
     /**
-        Sets the function that should be called when a change event is received.
-        \param  pOnReceiveChangeEventList   function to call on receive
+        Sets the function that should be called when a change event is received. The first
+        argument is the bound peer name of the connection it arrived on, so the lobby can
+        authorize the request against the seat that connection holds.
+        \param  pOnReceiveChangeEventList   function(senderName, changeEventList) to call
     */
-    inline void setOnReceiveChangeEventList(std::function<void (const ChangeEventList&)> pOnReceiveChangeEventList) {
+    inline void setOnReceiveChangeEventList(std::function<void (const std::string&, const ChangeEventList&)> pOnReceiveChangeEventList) {
         this->pOnReceiveChangeEventList = pOnReceiveChangeEventList;
     }
 
@@ -323,7 +436,36 @@ public:
     }
 
 private:
+    bool publicRelayRoom = false;
     static void debugNetwork(PRINTF_FORMAT_STRING const char* fmt, ...) PRINTF_VARARG_FUNC(1);
+
+    /// Bundles the game's callbacks for the shared payload handling.
+    NetworkSessionCallbacks sessionCallbacks() const;
+
+    /// Drives the relay session and drains its event queue. Called from update().
+    void updateRelaySession();
+
+    /**
+        Applies one game payload received over the relay.
+
+        Takes the sender's id rather than a reference to its record: handling a payload runs the
+        game's own callbacks, and anything that reaches the session again can add or remove a
+        peer, which moves the vector a reference would point into.
+    */
+    void handleRelayGamePayload(std::uint32_t peerId, const std::uint8_t* payload,
+                                std::size_t length);
+
+    /**
+        Hands one relay message to the transport.
+        \param  packetStream    the packet to send; its ENetPacket is consumed
+        \param  channel         0 or 1
+        \param  recipient       0 for every other peer in the room, or a relay peer id
+    */
+    bool sendPacketOverRelay(ENetPacketOStream& packetStream, int channel,
+                             std::uint32_t recipient);
+
+    /// The relay peer id of the designated host, or 0 if this process is the host.
+    std::uint32_t relayHostPeerId() const;
 
     void sendPacketToHost(ENetPacketOStream& packetStream, int channel = 0);
 
@@ -339,6 +481,46 @@ private:
     void sendPacketToAllConnectedPeers(ENetPacketOStream& packetStream, int channel = 0);
 
     void handlePacket(ENetPeer* peer, ENetPacketIStream& packetStream);
+
+    /**
+        Hands a mesh packet to the payload handling that both transports share.
+        \return true if this packet id belongs to the shared set
+    */
+    bool routeSharedPayload(ENetPeer* peer, Uint32 packetType, ENetPacketIStream& packetStream);
+
+    class PeerData;
+
+    /**
+        Applies the central admission policy to one inbound packet.
+        \param  peer        the connection the packet arrived on
+        \param  packetType  the packet id that was just read
+        \return true if the packet may be interpreted
+    */
+    bool admitPacket(ENetPeer* peer, Uint32 packetType);
+
+    /**
+        Records a rejected or malformed packet for this peer, throttles the log line and
+        disconnects peers that keep sending garbage.
+        \param  peer    the offending connection
+        \param  reason  short description for the log
+    */
+    void noteRejectedPacket(ENetPeer* peer, const char* reason);
+
+    /**
+        Requests a disconnect once and marks the connection, so further packets from it are
+        dropped without being parsed, counted or logged again.
+        \param  peer    the connection to drop
+        \param  reason  short description for the single log line
+    */
+    void beginPeerDisconnect(ENetPeer* peer, const char* reason);
+
+    /**
+        Accounts the raw size of an inbound packet against this peer's byte budget.
+        \param  peer        the connection the packet arrived on
+        \param  byteCount   size of the packet as delivered by ENet
+        \return true if the packet may be parsed
+    */
+    bool acceptIncomingBytes(ENetPeer* peer, std::size_t byteCount);
 
     class PeerData {
     public:
@@ -362,12 +544,61 @@ private:
         Uint32                  timeout;
 
         std::string             name;
+        bool                    bNameAssigned = false;  ///< identity is bound once and never re-bound
+        Uint32                  clientId = 0;           ///< stable per-connection id (not an address hash)
         std::string             gameVersion;
         std::string             quantBotConfigHash;
         std::string             objectDataHash;
         std::list<ENetPeer*>    notYetConnectedPeers;
+
+        // Abuse accounting: a legitimate peer never trips these.
+        NetworkPacketPolicy::RefusalCounter refusals;
+        NetworkPacketPolicy::RateWindow     packetWindow;
+        NetworkPacketPolicy::RateWindow     byteWindow;
+        Uint32                  lastRejectLogTime = 0;
     };
 
+    /**
+        Allocates peer state and gives the connection a stable local id.
+        \param  peer        the connection the state belongs to
+        \param  peerState   the initial handshake state
+        \return the new peer state (ownership stays with peer->data)
+    */
+    PeerData* createPeerData(ENetPeer* peer, PeerData::PeerState peerState);
+
+    // The path budget, start-game countdown and chat length bounds moved to
+    // src/Network/GamePayloadRouter.cpp with the payload handling they belong to. Two copies of
+    // one limit is how limits drift apart.
+
+    /// Mod checksums are 16 hex characters; this leaves room without allowing junk.
+    static constexpr std::size_t MAX_MOD_CHECKSUM_LENGTH = 128;
+    /// Longest status message accepted with a mod transfer result.
+    static constexpr std::size_t MAX_MOD_MESSAGE_LENGTH = 256;
+    /// The ENet host is created with 32 peer slots; the mesh can never legitimately exceed it.
+    static constexpr std::size_t MAX_MESH_PEERS = 32;
+    /// Traffic budgets and abuse thresholds live in NetworkPacketPolicy so they stay
+    /// transport independent and the tests use the same values the production path does.
+    static constexpr Uint32     MAX_REJECTED_PACKETS_PER_PEER = NetworkPacketPolicy::kMaxRefusalsPerBurst;
+    static constexpr Uint32     REJECT_DECAY_MS = NetworkPacketPolicy::kRefusalDecayMs;
+    static constexpr Uint32     MAX_PACKETS_PER_PEER_PER_SECOND = NetworkPacketPolicy::kMaxPacketsPerWindow;
+    static constexpr Uint32     BYTE_WINDOW_MS = NetworkPacketPolicy::kTrafficWindowMs;
+    static constexpr Uint64     MAX_PEER_BYTES_PER_SECOND = NetworkPacketPolicy::kMaxPeerBytesPerWindow;
+    static constexpr Uint64     MAX_MOD_TRANSFER_BYTES_PER_SECOND = NetworkPacketPolicy::kMaxModTransferBytesPerWindow;
+    /// Rejection log lines per peer are throttled to one per this many milliseconds.
+    static constexpr Uint32     REJECT_LOG_INTERVAL_MS = 5000;
+    /// Largest single packet ENet will reassemble. Applied before the reassembly buffer is
+    /// allocated, so an announced fragment total beyond it costs nothing. The largest
+    /// legitimate packet is a multiplayer map inside SENDGAMEINFO; a mod chunk is 64 KiB.
+    static constexpr std::size_t MAX_ENET_PACKET_SIZE = 4u * 1024 * 1024;
+    /// Aggregate incoming data ENet may hold for one peer while commands are reassembled.
+    static constexpr std::size_t MAX_ENET_WAITING_DATA = 16u * 1024 * 1024;
+
+    std::unique_ptr<GameInitSettings> pendingCoopMission;
+    Transport transport = Transport::EnetMesh;
+    std::unique_ptr<RoomSessionTransport> pRelayClient;
+    Uint32 nextClientId = 1;        ///< source of the stable per-connection client ids
+    Uint32 lastUnidentifiedLogTime = 0;  ///< throttles logging for connections without peer state
+    Uint32 simulationSeed = 0;
     ENetHost* host = nullptr;
     bool bIsServer = false;
     bool bLANServer = false;
@@ -386,10 +617,11 @@ private:
 
     std::function<void (const std::string&, const std::string&)>            pOnReceiveChatMessage;
     std::function<void (const GameInitSettings&, const ChangeEventList&)>   pOnReceiveGameInfo;
-    std::function<void (const ChangeEventList&)>                            pOnReceiveChangeEventList;
+    std::function<void (const std::string&, const ChangeEventList&)>        pOnReceiveChangeEventList;
     std::function<void (const std::string&, bool, int)>                     pOnPeerDisconnected;
     std::function<ChangeEventList (const std::string&)>                     pGetChangeEventListForNewPlayerCallback;
     std::function<void (unsigned int)>                                      pOnStartGame;
+    std::function<void (unsigned int)>                                      pOnStartGameBridge;
     std::function<void (const std::string&, const CommandList&)>            pOnReceiveCommandList;
     std::function<void (const std::string&, const std::set<Uint32>&, int)>  pOnReceiveSelectionList;
     std::function<void (const std::string&)>                                 pOnConfigMismatch;
@@ -399,6 +631,12 @@ private:
     std::function<void (size_t, size_t)>                                     pOnModDownloadProgress;     // Client: (bytesReceived, totalBytes)
     std::function<void (bool, const std::string&)>                          pOnModDownloadComplete;     // Client: (success, errorMsg)
     std::function<void (const std::string&, bool, const std::string&)>      pOnReceiveModAck;           // Host: (playerName, success, modChecksum)
+    std::function<void (const std::string&, std::uint8_t, const std::uint8_t*, std::size_t)> pOnReceiveRelayDiagnostic;
+    /// Bridges the shared payload handling back into pendingCoopMission; set by both constructors.
+    std::function<void (const GameInitSettings&)>                          pOnReceiveCoopMissionBridge;
+
+    /// Installs the callbacks the shared payload handling needs from the session itself.
+    void installSessionBridges();
 
     // Mod transfer state (for chunked transfer)
     struct ModTransferState {
@@ -407,8 +645,13 @@ private:
         size_t totalSize = 0;
         size_t receivedSize = 0;
         bool inProgress = false;
+        bool requested = false;         ///< true once this client asked the host for a mod
+        std::string requestedModName;   ///< the mod this client asked for; chunks must match it
     };
     ModTransferState modTransferState;
+
+    /// Clears a mod download, optionally reporting the failure to the lobby.
+    void abortModTransfer(const char* reason);
 
     std::unique_ptr<LANGameFinderAndAnnouncer>  pLANGameFinderAndAnnouncer = nullptr;
     std::unique_ptr<MetaServerClient>           pMetaServerClient = nullptr;

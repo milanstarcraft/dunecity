@@ -11,6 +11,7 @@
 #include <Map.h>
 #include <Tile.h>
 #include <Command.h>
+#include <CommandAuthorization.h>
 #include <misc/InputStream.h>
 #include <misc/OutputStream.h>
 
@@ -188,6 +189,7 @@ void HouseCityState::save(OutputStream& stream) const {
 }
 
 void HouseCityState::load(InputStream& stream) {
+    taxBaseEighths = 0;
     resPop     = stream.readSint32();
     comPop     = stream.readSint32();
     indPop     = stream.readSint32();
@@ -305,6 +307,17 @@ void CitySimulation::executeCityCommand(int playerID, int commandID,
                                         uint32_t p0, uint32_t p1, uint32_t p2) {
     if(!currentGameMap) return;
 
+    // City commands carry no acting object, so the issuer is the whole authorization: a
+    // command from a player that does not exist (or has no house) is a deterministic no-op on
+    // every peer. The parameter ranges are checked here too, because these values are cast
+    // straight into enums and simulation state.
+    const Player* issuer = (currentGame && playerID >= 0 && playerID <= 255)
+        ? currentGame->getPlayerByID(static_cast<Uint8>(playerID))
+        : nullptr;
+    if(issuer == nullptr || issuer->getHouse() == nullptr) {
+        return;
+    }
+
     switch(commandID) {
         case CMD_CITY_TOOL: {
             int x = static_cast<int>(p0);
@@ -315,11 +328,10 @@ void CitySimulation::executeCityCommand(int playerID, int commandID,
 
             Tile* tile = currentGameMap->getTile(x, y);
 
+            if(!CommandAuthorization::isValidCityToolType(toolType)) return;
+
             switch(toolType) {
                 case CityTool_Road: {
-                    const auto* player = currentGame && playerID >= 0 && playerID <= 255
-                        ? currentGame->getPlayerByID(static_cast<Uint8>(playerID)) : nullptr;
-                    if (!player || !player->getHouse()) return;
                     auto placementState = makeCityTilePlacementState(
                         tile->isRock(),
                         tile->isMountain(),
@@ -331,7 +343,7 @@ void CitySimulation::executeCityCommand(int playerID, int commandID,
                         return;
                     }
 
-                    tile->setOwner(roadOwnerAfterPlacement(tile->isRoad(), tile->getOwner(), player->getHouse()->getHouseID()));
+                    // The road overlay does not claim the underlying tile.
                     tile->setRoad(placementState.hasRoad);
                     tile->setDestroyedStructureTile(DestroyedStructure_None);
                     SDL_Log("CityTool: Road placed at (%d, %d)", x, y);
@@ -347,11 +359,20 @@ void CitySimulation::executeCityCommand(int playerID, int commandID,
         case CMD_CITY_PLACE_ZONE: {
             int x = static_cast<int>(p0);
             int y = static_cast<int>(p1);
+
+            if(!CommandAuthorization::isValidCityZoneType(p2)) return;
             auto zoneType = static_cast<ZoneType>(p2);
 
             if(!currentGameMap->tileExists(x, y)) return;
 
             Tile* tile = currentGameMap->getTile(x, y);
+
+            // The same preconditions Game::handleCityZonePlacementClick applies locally. They
+            // have to be re-checked here because this is the path a remote peer reaches, and
+            // every peer must reach the same conclusion.
+            if(!tile->isRock() && tile->getType() != Terrain_Slab) return;
+            if(tile->hasANonInfantryGroundObject()) return;
+
             tile->setCityZoneType(zoneType);
             // Start at density 0 (empty lot). The first growth scan will
             // bump this to 1 once basic conditions are met.
@@ -363,18 +384,18 @@ void CitySimulation::executeCityCommand(int playerID, int commandID,
             // (0-20). Routed through the command system so multiplayer
             // stays deterministic.
             auto* sim = currentGame ? currentGame->getCitySimulation() : nullptr;
-            if (sim) {
+            if (sim && CommandAuthorization::isValidCityTaxRate(p1)) {
                 sim->setCityTax(static_cast<int16_t>(p1));
             }
         } break;
 
         case CMD_CITY_SET_BUDGET: {
-            // p0 = police funding %; p1/p2 reserved (road upkeep is
-            // fixed at full funding). Routed through the command
+            // p0 = police funding %; p1/p2 reserved (roads have no upkeep). Routed through the command
             // system so multiplayer stays deterministic.
             auto* sim = currentGame ? currentGame->getCitySimulation() : nullptr;
-            if (sim) {
-                sim->setPoliceFundingPercent(static_cast<int>(p0));
+            // The command belongs to its issuer, never the observing/local house.
+            if (sim && CommandAuthorization::isValidFundingPercent(p0)) {
+                sim->setPoliceFundingPercent(issuer->getHouse()->getHouseID(), static_cast<int>(p0));
             }
         } break;
 

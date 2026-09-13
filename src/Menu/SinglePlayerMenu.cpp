@@ -16,6 +16,9 @@
  */
 
 #include <Menu/SinglePlayerMenu.h>
+#include <Menu/CrossplayMenu.h>
+#include <Menu/CustomGamePlayers.h>
+#include <FileClasses/FileManager.h>
 
 #include <globals.h>
 
@@ -107,7 +110,14 @@ SinglePlayerMenu::SinglePlayerMenu() : MenuBase() {
 SinglePlayerMenu::~SinglePlayerMenu() = default;
 
 void SinglePlayerMenu::onCampaign() {
-    int player = HouseChoiceMenu().showMenu();
+    playCampaign();
+}
+
+void SinglePlayerMenu::playCampaign(bool online) {
+  bool keepRules = false;
+  for(;;) {
+    int player = HouseChoiceMenu(online, keepRules).showMenu();
+    keepRules = true;
 
     if(player < 0) {
         return;
@@ -123,22 +133,21 @@ void SinglePlayerMenu::onCampaign() {
         "qBotSupportEasy",
         "qBotSupportMedium",
         "qBotSupportHard",
-        "qBotSupportBrutal"
+        "qBotSupportBrutal",
+        "qBotEasy", "qBotMedium", "qBotHard", "qBotBrutal", "qBotDefend"
     };
 
     const char* const kEnemyAIClasses[] = {
-        "CampaignAIPlayer",
-        "qBotEasy",
-        "qBotMedium",
-        "qBotHard",
-        "qBotBrutal"
+        "qBotEasy", "qBotMedium", "qBotHard", "qBotBrutal", "qBotDefend", "CampaignAIPlayer"
     };
 
-    const bool supportSelected = (supportBotIndex > 0);
+    const bool supportSelected = (supportBotIndex > 0) && !HouseChoiceMenu::isOnline();
     const char* supportPlayerClass = supportSelected ? kSupportPlayerClasses[supportBotIndex] : nullptr;
     const char* enemyAIClass = kEnemyAIClasses[enemyAIIndex];
 
-    GameInitSettings init((HOUSETYPE) player, gameOptions);
+    GameInitSettings init = HouseChoiceMenu::isSingleMission()
+        ? GameInitSettings((HOUSETYPE) player, HouseChoiceMenu::getStartLevel(), gameOptions)
+        : GameInitSettings((HOUSETYPE) player, gameOptions, HouseChoiceMenu::getStartLevel());
     if(supportSelected) {
         init.setMultiplePlayersPerHouse(true);
     }
@@ -152,7 +161,7 @@ void SinglePlayerMenu::onCampaign() {
             humanHouseInfo.addPlayerInfo( GameInitSettings::PlayerInfo(settings.general.playerName, HUMANPLAYERCLASS) );
 
             if(supportSelected && supportPlayerClass != nullptr && *supportPlayerClass != '\0') {
-                std::string allyName = getHouseNameByNumber((HOUSETYPE) houseID) + " " + _("(AI Support)");
+                std::string allyName = getHouseNameByNumber((HOUSETYPE) houseID) + " " + (supportBotIndex >= 5 ? _("(QuantBot)") : _("(AI Support)"));
                 humanHouseInfo.addPlayerInfo(GameInitSettings::PlayerInfo(allyName, supportPlayerClass));
             }
 
@@ -164,9 +173,18 @@ void SinglePlayerMenu::onCampaign() {
         }
     }
 
-    startSinglePlayerGame(init);
-
-    quit();
+    if(HouseChoiceMenu::isOnline()) {
+        init.enableCoop(!HouseChoiceMenu::isSingleMission(), settings.general.playerName + "'s co-op game");
+        auto file = pFileManager->openCampaignFile(init.getFilename());
+        const auto size = SDL_RWsize(file.get());
+        if(size <= 0) throw std::runtime_error("Could not read this campaign mission.");
+        std::string data(static_cast<size_t>(size), '\0');
+        if(SDL_RWread(file.get(), data.data(), 1, data.size()) != data.size()) throw std::runtime_error("Could not read this campaign mission.");
+        init.setScenarioData(data);
+        if(CrossplayMenu(init, HouseChoiceMenu::isPublicGame()).showMenu() == MENU_QUIT_GAME_FINISHED) return;
+        online = true;
+    } else { startSinglePlayerGame(init); return; }
+  }
 }
 
 void SinglePlayerMenu::onCustom() {

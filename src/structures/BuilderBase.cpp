@@ -1,3 +1,4 @@
+#include <dunecity/CityFactionPolicy.h>
 #include <players/AIDecisionLog.h>
 /*
  *  This file is part of Dune Legacy.
@@ -64,10 +65,9 @@ bool isWorfineryDirectProduct(Uint32 itemID) {
         || itemID == Unit_Harvester;
 }
 
-bool isCityHarkonnenOrnithopterBuilder(Uint32 builderID, Uint32 productID, int originalHouseID) {
-    return currentGame && currentGame->isCitySimEnabled()
-        && originalHouseID == HOUSE_HARKONNEN
-        && builderID == Structure_HighTechFactory && productID == Unit_Ornithopter;
+bool isCityHarkonnenProductBuilder(Uint32 builderID, Uint32 productID, int originalHouseID) {
+    return DuneCity::cityHarkonnenProduct(currentGame && currentGame->isCitySimEnabled(),
+        originalHouseID,builderID,productID);
 }
 
 bool isAlternateTornieBuilder(Uint32 builderID, Uint32 itemID) {
@@ -290,12 +290,7 @@ void BuilderBase::updateProductionProgress() {
                 FixPoint totalBuildCosts = tmp->price;
                 int buildTime = currentGame->objectData.data[currentProducedItem][originalHouseID].buildtime;
                 if (currentGame->isCitySimEnabled()) {
-                    const int concreteBuildTime =
-                        currentGame->objectData.data[Structure_Slab1][originalHouseID].buildtime;
-                    const int policeBuildTime =
-                        currentGame->objectData.data[Structure_PoliceStation][originalHouseID].buildtime;
-                    buildTime = DuneCity::getCityBuildTime(
-                        currentProducedItem, buildTime, concreteBuildTime, policeBuildTime);
+                    buildTime = DuneCity::getCityBuildTime(currentProducedItem, buildTime);
                 }
                 FixPoint totalBuildGameTicks = buildTime * 15;
                 FixPoint buildCosts = totalBuildCosts / totalBuildGameTicks;
@@ -303,7 +298,7 @@ void BuilderBase::updateProductionProgress() {
                 productionProgress += owner->takeCredits(buildCosts*buildSpeed);
 
                 /* That was wrong. Build speed does not depend on power production
-                if (getOwner()->hasPower() || (((currentGame->gameType == GameType::Campaign) || (currentGame->gameType == GameType::Skirmish)) && getOwner()->isAI())) {
+                if (getOwner()->hasPower() || (((isCampaignGameType(currentGame->gameType)) || ((currentGame->gameType == GameType::Skirmish || currentGame->gameType == GameType::SkirmishCoop))) && getOwner()->isAI())) {
                     //if not enough power, production is halved
                     ProductionProgress += owner->takeCredits(0.25_fix);
                 } else {
@@ -373,7 +368,7 @@ int BuilderBase::getMaxUpgradeLevel() const {
         const ObjectData::ObjectDataStruct& objData = currentGame->objectData.data[i][dataHouseID];
 
         if(objData.enabled && (objData.builder == (int) itemID
-            || isCityHarkonnenOrnithopterBuilder(itemID, i, originalHouseID))
+            || isCityHarkonnenProductBuilder(itemID, i, originalHouseID))
             && (objData.techLevel <= currentGame->techLevel)) {
             upgradeLevel = std::max(upgradeLevel, (int) objData.upgradeLevel);
         }
@@ -407,10 +402,10 @@ void BuilderBase::updateBuildList()
         }
 
         // City-sim gate: Starport is a shipyard scaled to a sizable city —
-        // require 20000 displayed population (= 1000 internal) before it can
+        // require 10000 displayed population (= 500 internal) before it can
         // be built. Outside city sim there's no population, so no gate.
         if (itemID2Add == Structure_StarPort && currentGame->isCitySimEnabled()) {
-            constexpr int kStarPortMinDisplayPop = 20000;
+            constexpr int kStarPortMinDisplayPop = 10000;
             constexpr int kStarPortMinInternalPop =
                 kStarPortMinDisplayPop / DuneCity::CitySimulation::kPopDisplayMultiplier;
             auto* citySim = currentGame->getCitySimulation();
@@ -444,7 +439,7 @@ void BuilderBase::updateBuildList()
             ? std::max(9, configuredTechLevel)
             : configuredTechLevel;
         const bool producedHere = objData.builder == static_cast<int>(itemID)
-                               || isCityHarkonnenOrnithopterBuilder(itemID, itemID2Add, originalHouseID)
+                               || isCityHarkonnenProductBuilder(itemID, itemID2Add, originalHouseID)
                                || isAlternateTornieBuilder(itemID, itemID2Add)
                                || specialChemicalCarryall;
         const bool directWorfineryProduct = itemID == Structure_Worfinery

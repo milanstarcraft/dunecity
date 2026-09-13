@@ -16,6 +16,7 @@
  */
 
 #include <main.h>
+#include <Network/RelayWebSocket.h>
 
 #include <algorithm>
 #include <cmath>
@@ -91,6 +92,34 @@
 #include <misc/MacFunctions.h>
 #endif
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/em_js.h>
+
+// The browser build has no command line, so the page URL is how a tester names a relay. Both
+// helpers only read the query string; the value is validated by the admission client before it
+// is used, and a plain loopback address still needs the explicit development opt-in.
+EM_JS(void, dunecityReadRelayUrlParameter, (char* out, int maxLength), {
+    var value = '';
+    try {
+        value = new URLSearchParams(location.search).get('relay') || '';
+    } catch (error) {
+        value = '';
+    }
+    if (value.length > maxLength - 1) {
+        value = '';
+    }
+    stringToUTF8(value, out, maxLength);
+});
+
+EM_JS(int, dunecityReadRelayDevelopmentParameter, (), {
+    try {
+        return new URLSearchParams(location.search).get('relaydev') === '1' ? 1 : 0;
+    } catch (error) {
+        return 0;
+    }
+});
+#endif
+
 #if !defined(__GNUG__) || (defined(_GLIBCXX_HAS_GTHREADS) && defined(_GLIBCXX_USE_C99_STDINT_TR1) && (ATOMIC_INT_LOCK_FREE > 1) && !defined(_GLIBCXX_HAS_GTHREADS))
 // g++ does not provide std::async on all platforms
 #define HAS_ASYNC
@@ -120,7 +149,8 @@ void setVideoMode(int displayIndex);
 void realign_buttons();
 
 static void printUsage() {
-    fprintf(stderr, "Usage:\n\tdunecity [--showlog] [--fullscreen|--window] [--PlayerName=X] [--ServerPort=X]\n");
+    fprintf(stderr, "Usage:\n\tdunecity [--showlog] [--fullscreen|--window] [--PlayerName=X] [--ServerPort=X]\n"
+                    "\t         [--RelayEndpoint=HTTPS_URL] [--RelayDevEndpoint=LOOPBACK_URL] [--RelayDev]\n");
 }
 
 int getLogicalToPhysicalResolutionFactor(int physicalWidth, int physicalHeight) {
@@ -177,17 +207,19 @@ void setVideoMode(int displayIndex)
     int presentedHeight = 0;
 
 #ifdef __EMSCRIPTEN__
-    // Keep SDL's logical surface independent from the browser viewport. CSS
-    // owns presentation size and fullscreen so the website toolbar remains
-    // available and the game keeps its native 4:3 coordinate system.
-    videoFlags = SDL_WINDOW_RESIZABLE;
+    // The selected resolution is the backing surface; the browser shell fits
+    // that surface into the available stage without changing its aspect ratio.
+    // SDL_WINDOW_RESIZABLE would replace the requested backing resolution
+    // with the CSS size at creation and on viewport resize.
+    videoFlags = 0;
     settings.video.fullscreen = false;
-    settings.video.physicalWidth = 640;
-    settings.video.physicalHeight = 480;
-    settings.video.width = 640;
-    settings.video.height = 480;
-    presentedWidth = 640;
-    presentedHeight = 480;
+    settings.video.physicalWidth = std::max(settings.video.physicalWidth, SCREEN_MIN_WIDTH);
+    settings.video.physicalHeight = std::max(settings.video.physicalHeight, SCREEN_MIN_HEIGHT);
+    presentedWidth = settings.video.physicalWidth;
+    presentedHeight = settings.video.physicalHeight;
+    const int factor = getLogicalToPhysicalResolutionFactor(presentedWidth, presentedHeight);
+    settings.video.width = std::max(presentedWidth / factor, SCREEN_MIN_WIDTH);
+    settings.video.height = std::max(presentedHeight / factor, SCREEN_MIN_HEIGHT);
 #else
     if(settings.video.fullscreen) {
         videoFlags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
@@ -698,7 +730,7 @@ void createDefaultConfigFile(const std::string& configfilepath, const std::strin
                                 "MetaServer = %s\n"
                                 "\n"
                                 "[AI]\n"
-                                "Campaign AI = CampaignAIPlayer\n"
+                                "Campaign AI = qBotEasy\n"
                                 "\n"
                                 "[Game Options]\n"
                                 "Game Speed = 16                         # The default speed of the game: 32 = very slow, 8 = very fast, 16 = default\n"
@@ -829,6 +861,18 @@ std::string getUserLanguage() {
 
 
 int main(int argc, char *argv[]) {
+#ifndef __EMSCRIPTEN__
+    // Packaging check: no SDL window, profile, or game session is created.
+    for(int index = 1; index < argc; ++index) {
+        if(std::strcmp(argv[index], "--check-relay-support") == 0) {
+            const auto support = relayWebSocketSupport();
+            const bool secure = support.available && support.reason.empty();
+            std::fprintf(secure ? stdout : stderr, "%s\n", secure
+                ? "Secure relay WebSocket support available" : support.reason.c_str());
+            return secure ? EXIT_SUCCESS : EXIT_FAILURE;
+        }
+    }
+#endif
     SDL_LogSetOutputFunction(logOutputFunction, nullptr);
     SDL_LogSetAllPriority(SDL_LOG_PRIORITY_WARN);
     SDL_LogSetPriority(SDL_LOG_CATEGORY_APPLICATION, SDL_LOG_PRIORITY_VERBOSE);
@@ -932,7 +976,10 @@ int main(int argc, char *argv[]) {
             if(parameter == "--showlog") {
                 // special parameter which does not overwrite settings
                 bShowDebugLog = true;
-            } else if((parameter == "-f") || (parameter == "--fullscreen") || (parameter == "-w") || (parameter == "--window") || (parameter.compare(0, 13, "--PlayerName=") == 0) || (parameter.compare(0, 13, "--ServerPort=") == 0)) {
+            } else if((parameter == "-f") || (parameter == "--fullscreen") || (parameter == "-w") || (parameter == "--window") || (parameter.compare(0, 13, "--PlayerName=") == 0) || (parameter.compare(0, 13, "--ServerPort=") == 0)
+                      || parameter.compare(0, 16, "--RelayEndpoint=") == 0
+                      || parameter.compare(0, 19, "--RelayDevEndpoint=") == 0
+                      || parameter == "--RelayDev") {
                 // normal parameter for overwriting settings
                 // handle later
             } else {
@@ -997,8 +1044,10 @@ int main(int argc, char *argv[]) {
         }
 
         // Install crash handlers early, after logging is set up
+#ifndef __EMSCRIPTEN__
         std::string crashLogPath = getLogFilepath();
         installCrashHandlers(crashLogPath.c_str());
+#endif
 
         SDL_Log("Starting DuneCity %s on %s", VERSION, SDL_GetPlatform());
 
@@ -1103,6 +1152,43 @@ int main(int argc, char *argv[]) {
             
             settings.network.debugNetwork = myINIFile.getBoolValue("Network","Debug Network",false);
 
+            // Crossplay room relay. The production endpoint is configuration only; nothing here
+            // deploys one, and an empty value simply means crossplay is not offered.
+            settings.network.relayEndpoint =
+                myINIFile.getStringValue("Network","Relay Endpoint",DEFAULT_RELAY_ENDPOINT);
+            settings.network.relayDevelopmentEndpoint =
+                myINIFile.getStringValue("Network","Relay Development Endpoint",
+                                         DEVELOPMENT_RELAY_ENDPOINT);
+            settings.network.relayUseDevelopmentEndpoint =
+                myINIFile.getBoolValue("Network","Use Relay Development Endpoint",false);
+
+            // Direct play. Separate keys from the relay on purpose: this address may only ever
+            // name a signaling service, and the client refuses a relay address here.
+            settings.network.directEndpoint =
+                myINIFile.getStringValue("Network","Direct Endpoint",DEFAULT_DIRECT_ENDPOINT);
+            settings.network.directDevelopmentEndpoint =
+                myINIFile.getStringValue("Network","Direct Development Endpoint",
+                                         DEVELOPMENT_DIRECT_ENDPOINT);
+
+#ifdef __EMSCRIPTEN__
+            // The browser build has no command line, so the page URL may name the relay. The
+            // value goes through exactly the same validation as any other endpoint, and a plain
+            // loopback address is still only accepted with the explicit development opt-in.
+            {
+                char relayFromPage[256] = {0};
+                dunecityReadRelayUrlParameter(relayFromPage, static_cast<int>(sizeof(relayFromPage)));
+                if(relayFromPage[0] != '\0') {
+                    settings.network.relayEndpoint = relayFromPage;
+                    settings.network.relayDevelopmentEndpoint = relayFromPage;
+                    settings.network.directEndpoint = relayFromPage;
+                    settings.network.directDevelopmentEndpoint = relayFromPage;
+                }
+                if(dunecityReadRelayDevelopmentParameter() != 0) {
+                    settings.network.relayUseDevelopmentEndpoint = true;
+                }
+            }
+#endif
+
             settings.ai.campaignAI = myINIFile.getStringValue("AI","Campaign AI",DEFAULTAIPLAYERCLASS);
 
             settings.gameOptions.gameSpeed = myINIFile.getIntValue("Game Options","Game Speed",GAMESPEED_DEFAULT);
@@ -1154,6 +1240,16 @@ int main(int argc, char *argv[]) {
                     settings.general.playerName = parameter.substr(strlen("--PlayerName="));
                 } else if(parameter.compare(0, 13, "--ServerPort=") == 0) {
                     settings.network.serverPort = atol(argv[i] + strlen("--ServerPort="));
+                } else if(parameter.compare(0, 16, "--RelayEndpoint=") == 0) {
+                    settings.network.relayEndpoint = parameter.substr(strlen("--RelayEndpoint="));
+                } else if(parameter.compare(0, 19, "--RelayDevEndpoint=") == 0) {
+                    settings.network.relayDevelopmentEndpoint =
+                        parameter.substr(strlen("--RelayDevEndpoint="));
+                    settings.network.relayUseDevelopmentEndpoint = true;
+                } else if(parameter == "--RelayDev") {
+                    // Explicit opt-in: this is the only way a plain ws:// loopback endpoint
+                    // becomes acceptable.
+                    settings.network.relayUseDevelopmentEndpoint = true;
                 }
             }
 
@@ -1193,6 +1289,23 @@ int main(int argc, char *argv[]) {
                 SDL_Log("SDL2_ttf compile-time v%d.%d.%d", TTFCompiledVersion.major, TTFCompiledVersion.minor, TTFCompiledVersion.patch);
             }
 
+#ifdef __EMSCRIPTEN__
+            // Migrate the old forced VGA browser default once. Preserve any
+            // other saved resolution and every subsequent explicit VGA choice.
+            if(bFirstInit && myINIFile.getIntValue("Video", "Browser Display Version", 0) < 1) {
+                if(bFirstGamestart || (settings.video.physicalWidth == 640 && settings.video.physicalHeight == 480)) {
+                    settings.video.physicalWidth = WebRuntime::defaultVideoWidth();
+                    settings.video.physicalHeight = WebRuntime::defaultVideoHeight();
+                    myINIFile.setIntValue("Video", "Physical Width", settings.video.physicalWidth);
+                    myINIFile.setIntValue("Video", "Physical Height", settings.video.physicalHeight);
+                    settings.video.preferredZoomLevel = 1;
+                    myINIFile.setIntValue("Video", "Preferred Zoom Level", 1);
+                }
+                myINIFile.setIntValue("Video", "Browser Display Version", 1);
+                myINIFile.saveChangesTo(getConfigFilepath());
+                WebRuntime::syncPersistentFiles();
+            }
+#else
             if(bFirstGamestart == true && bFirstInit == true) {
                 SDL_DisplayMode displayMode;
                 SDL_GetDesktopDisplayMode(currentDisplayIndex, &displayMode);
@@ -1212,6 +1325,8 @@ int main(int argc, char *argv[]) {
 
                 myINIFile.saveChangesTo(getConfigFilepath());
             }
+
+#endif
 
 #ifdef __ANDROID__
             if(bFirstInit == true) {

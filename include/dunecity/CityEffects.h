@@ -147,7 +147,6 @@ inline CityRole getStructureCityRole(int itemID) {
             return CityRole::Commercial;
         case Structure_ZoneIndustrial:
         case Structure_ConstructionYard:
-        case Structure_WindTrap:
         case Structure_LightFactory:
         case Structure_HeavyFactory:
         case Structure_HighTechFactory:
@@ -170,18 +169,19 @@ inline int getStructureMaxLevel(int itemID) {
         case Structure_ZoneIndustrial:
         case Structure_Palace:          // civic dual — grows to max density
             return 3;
-        case Structure_WindTrap:        // clean light industry, fixed at level 1
+        case Structure_WindTrap:        // government power, no industry
+            return 0;
+        case Structure_Silo:            // industrial low (no pollution)
+        case Structure_LightFactory:    // industrial low
             return 1;
         case Structure_Radar:           // commercial medium
-        case Structure_LightFactory:    // industrial medium
+        case Structure_Refinery:        // industrial medium
+        case Structure_HeavyFactory:    // industrial medium
+        case Structure_HighTechFactory: // industrial medium
+        case Structure_RepairYard:      // industrial medium
             return 2;
-        case Structure_Refinery:        // industrial high
-        case Structure_Silo:            // industrial high (no pollution)
-        case Structure_HighTechFactory: // industrial high
         case Structure_IX:              // commercial high
         case Structure_ConstructionYard: // industrial high (acts as factory)
-        case Structure_HeavyFactory:    // industrial high
-        case Structure_RepairYard:      // industrial high
         case Structure_StarPort:        // shipyard — industrial high
         case Structure_Airport:         // transport hub — commercial high
         case Structure_Barracks:        // residential high (infantry)
@@ -193,24 +193,32 @@ inline int getStructureMaxLevel(int itemID) {
     }
 }
 
+/// Private zones pay tax. The Palace is the sole government exception, with
+/// both R and C income. Fiscal status is independent of employment role.
+inline bool isTaxableCityStructure(int itemID) {
+    return itemID == Structure_ZoneResidential || itemID == Structure_ZoneCommercial
+        || itemID == Structure_ZoneIndustrial || itemID == Structure_Palace;
+}
+
+inline int effectiveCityLevel(int itemID, int level) {
+    return std::clamp(level, 0, getStructureMaxLevel(itemID));
+}
+
 // --- Pollution emission ------------------------------------------------------
 
 /// Per-source pollution emission (0-100 scale), scaled by current level.
-/// Industrial-role structures pollute proportionally to their level; all
-/// other roles emit zero.
+/// Industrial sources pollute by their capped city density. Government tax
+/// exemption does not remove factory emissions.
 inline int getPollutionEmission(int itemID, int level) {
+    level = effectiveCityLevel(itemID, level);
     if (level <= 0) return 0;
-    if (level > 3) level = 3;
     if (getStructureCityRole(itemID) != CityRole::Industrial) return 0;
-
-    // Wind power supplies industrial jobs without emitting pollution.
-    if (itemID == Structure_WindTrap) return 0;
 
     // Starport is Industrial for jobs/demand but does not pollute (it's a
     // trade hub, not a factory). Per spec override.
     if (itemID == Structure_StarPort) return 0;
 
-    // Spice Silo is industrial-high for jobs/demand but stores spice — no
+    // Spice Silo is industrial-low for jobs/demand but stores spice — no
     // smokestacks, no pollution.
     if (itemID == Structure_Silo) return 0;
 
@@ -237,18 +245,17 @@ inline int supplyForLevel(int level) {
 
 inline int getCommercialSupply(int itemID, int level) {
     return (getStructureCityRole(itemID) == CityRole::Commercial || itemID == Structure_Palace)
-        ? detail::supplyForLevel(level) : 0;
+        ? detail::supplyForLevel(effectiveCityLevel(itemID, level)) : 0;
 }
 
 inline int getIndustrialSupply(int itemID, int level) {
-    if (itemID == Structure_WindTrap) level = std::min(level,1);
     return (getStructureCityRole(itemID) == CityRole::Industrial)
-        ? detail::supplyForLevel(level) : 0;
+        ? detail::supplyForLevel(effectiveCityLevel(itemID, level)) : 0;
 }
 
 inline int getResidentialSupply(int itemID, int level) {
     return (getStructureCityRole(itemID) == CityRole::Residential)
-        ? detail::supplyForLevel(level) : 0;
+        ? detail::supplyForLevel(effectiveCityLevel(itemID, level)) : 0;
 }
 
 // --- Police coverage (crime reduction in radius) -----------------------------
@@ -545,7 +552,7 @@ inline int getZoneValueTier(int landValue, int numTiers) {
 /// getZonePopulation returns the residential portion; use
 /// getPalaceCommercialPopulation() for the commercial half.
 inline int getZonePopulation(int itemID, int level) {
-    if (itemID == Structure_WindTrap) level = std::min(level,1);
+    level = effectiveCityLevel(itemID, level);
     if (level <= 0) return 0;
     if (level > 3) level = 3;
 
@@ -566,6 +573,22 @@ inline int getZonePopulation(int itemID, int level) {
 /// Separate from getZonePopulation so the main loop can add this to comPop.
 inline int getPalaceCommercialPopulation(int level) {
     return getZonePopulation(Structure_ZoneCommercial, level);
+}
+
+/// Weighted tax population in eighths. Private R/C/I income receives a 2x
+/// balance multiplier; Palace retains its unboosted R+C contribution. Preserve
+/// fractional houses until the city-wide annual total is rounded.
+constexpr int kZoneTaxMultiplier = 2;
+inline int taxablePopulationEighths(int itemID, int population, int level) {
+    population = std::max(0, population);
+    switch (itemID) {
+        case Structure_ZoneResidential: return population * kZoneTaxMultiplier;
+        case Structure_ZoneCommercial:
+        case Structure_ZoneIndustrial: return population * 8 * kZoneTaxMultiplier;
+        case Structure_Palace:
+            return population + getPalaceCommercialPopulation(effectiveCityLevel(itemID,level)) * 8;
+        default: return 0;
+    }
 }
 
 // --- Traffic connectivity result ---------------------------------------------
@@ -976,26 +999,15 @@ constexpr uint32_t kCyclesPerCityDay  = kCyclesPerCityYear / kCityDaysPerYear;
 constexpr uint32_t kCyclesPerBudgetTick = 1;
 constexpr int      kBudgetTicksPerYear  = static_cast<int>(kCyclesPerCityYear);
 
-/// Compute annual tax revenue (in credits). Revenue scales with population,
-/// tax rate, AND average land value — richer neighbourhoods pay more tax,
-/// matching SimCity Classic's `taxFund = cityTax * totalPop * landValueAvg / 120`.
-/// `avgLandValue` is 0..250; at 128 (midpoint) the multiplier is ~1.0x.
-/// When avgLandValue is 0 (unknown / not passed), falls back to the
-/// population-only formula for backward compatibility.
-///
-/// Per-citizen contribution: 200/3 credits/year at 100% tax rate. This keeps
-/// city tax income useful without letting mature cities outpace spice harvest
-/// too aggressively.
-inline int32_t computeAnnualTaxRevenue(int totalPopulation, int taxRatePct,
-                                       int avgLandValue = 0) {
-    if (totalPopulation <= 0 || taxRatePct <= 0) return 0;
-    int32_t base = static_cast<int32_t>(
-        (static_cast<int64_t>(totalPopulation) * 200 * taxRatePct) / (100 * 3));
-    if (avgLandValue > 0) {
-        // Scale by land value: 128 → 1.0x, 250 → ~2.0x, 30 → ~0.23x
-        base = static_cast<int32_t>((static_cast<int64_t>(base) * avgLandValue) / 128);
-    }
-    return base;
+/// Micropolis easy tax: (R/8 + C + I) * landValue/120 * taxRate * 1.4.
+/// Input is tax population in EIGHTHS, excluding government except Palace.
+/// Round only the city-wide annual total; retain partial-house contributions.
+/// Explicit zero land value means zero income; forecasts may use default128.
+inline int32_t computeAnnualTaxRevenue(int taxBaseEighths, int taxRatePct,
+                                       int avgLandValue = 128) {
+    if (taxBaseEighths <= 0 || taxRatePct <= 0 || avgLandValue <= 0) return 0;
+    return static_cast<int32_t>(int64_t(taxBaseEighths) * avgLandValue * taxRatePct * 14
+        / (8 * 120 * 10));
 }
 
 // --- Hospital and Church census (SC Classic) --------------------------------

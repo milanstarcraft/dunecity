@@ -16,10 +16,13 @@
  */
 
 #include <Game.h>
+#include <GUI/dune/FeedbackWindow.h>
+#include <misc/CampaignControls.h>
 #include <main.h>
 #include <cstdarg>
 #include <ctime>
 #include <chrono>
+#include <cmath>
 
 // Initialize static performance logging members
 std::ofstream Game::performanceLogFile;
@@ -56,8 +59,11 @@ std::mutex Game::performanceLogMutex;
 #include <players/HumanPlayer.h>
 #include <players/QuantBot.h>
 
+#include <CommandBufferPolicy.h>
+
 #include <Network/NetworkManager.h>
 #include <Network/MetaServerClient.h>
+#include <Network/PathBudgetSync.h>
 #include <mod/ModManager.h>
 
 #include <GUI/dune/InGameMenu.h>
@@ -373,6 +379,9 @@ Game::~Game() {
         pNetworkManager->setOnReceiveCommandList(std::function<void (const std::string&, const CommandList&)>());
         pNetworkManager->setOnReceiveSelectionList(std::function<void (const std::string&, const std::set<Uint32>&, int)>());
         pNetworkManager->setOnPeerDisconnected(std::function<void (const std::string&, bool, int)>());
+        pNetworkManager->setOnReceiveClientStats({});
+        pNetworkManager->setOnReceiveSetPathBudget({});
+        pNetworkManager->setOnReceiveRelayDiagnostic({});
     }
 
     for(StructureBase* pStructure : structureList) {
@@ -516,6 +525,7 @@ void Game::initGame(const GameInitSettings& newGameInitSettings) {
             }
         } break;
 
+        case GameType::LoadCoop:
         case GameType::LoadMultiplayer: {
             IMemoryStream memStream(gameInitSettings.getFiledata().c_str(), gameInitSettings.getFiledata().size());
 
@@ -524,6 +534,8 @@ void Game::initGame(const GameInitSettings& newGameInitSettings) {
             }
         } break;
 
+        case GameType::CampaignCoop:
+        case GameType::SkirmishCoop:
         case GameType::Campaign:
         case GameType::Skirmish:
         case GameType::CustomGame:
@@ -548,7 +560,7 @@ void Game::initGame(const GameInitSettings& newGameInitSettings) {
             // Apply the city reactor balance only to a city match. ObjectData
             // also loads non-city mods and must preserve their configured stats.
             if (citySimEnabled_) for (int h = 0; h < NUM_HOUSES; ++h)
-                objectData.data[Structure_NuclearPlant][h].hitpoints = objectData.data[Structure_StarPort][h].hitpoints;
+                objectData.data[Structure_NuclearPlant][h].hitpoints = 750;
 
             objectData.logSettings();
 
@@ -570,7 +582,7 @@ void Game::initGame(const GameInitSettings& newGameInitSettings) {
                 citySimulation_.reset();
             }
 
-            if(bReplay == false && gameInitSettings.getGameType() != GameType::CustomGame && gameInitSettings.getGameType() != GameType::CustomMultiplayer) {
+            if(bReplay == false && gameInitSettings.getGameType() != GameType::CustomGame && !isNetworkGameType(gameInitSettings.getGameType())) {
                 /* do briefing */
                 SDL_Log("Briefing...");
                 BriefingMenu(gameInitSettings.getHouseID(), gameInitSettings.getMission(),BRIEFING).showMenu();
@@ -606,11 +618,17 @@ void Game::startMatchAnalytics() {
     // A multiplayer game is reported by its host only. The reporter is kept
     // separate from lobby announcement state, which is deliberately stopped
     // once the countdown ends.
-    if (gameInitSettings.getGameType() == GameType::CustomMultiplayer
+    if (isNetworkGameType(gameInitSettings.getGameType())
         && (!pNetworkManager || !pNetworkManager->isServer())) {
         return;
     }
     matchAnalyticsID = analyticsMatchID(gameInitSettings);
+#ifdef __EMSCRIPTEN__
+    // Browser builds have no SDL worker threads. Submit asynchronously through
+    // the same-origin web shell instead of creating a native MetaServerClient.
+    WebRuntime::reportMatchStats("start", matchAnalyticsID, buildMatchAnalyticsPayload(false));
+    matchAnalyticsStarted = true;
+#else
     try {
         matchAnalyticsClient = std::make_unique<MetaServerClient>(settings.network.metaServer);
         matchAnalyticsClient->reportGameStats("start", matchAnalyticsID, buildMatchAnalyticsPayload(false));
@@ -619,15 +637,22 @@ void Game::startMatchAnalytics() {
         SDL_Log("Game: Match analytics reporter unavailable: %s", exception.what());
         matchAnalyticsClient.reset();
     }
+#endif
 }
 
 void Game::finishMatchAnalytics() {
+#ifdef __EMSCRIPTEN__
+    if (!matchAnalyticsStarted) return;
+    WebRuntime::reportMatchStats("end", matchAnalyticsID, buildMatchAnalyticsPayload(true));
+    matchAnalyticsStarted = false;
+#else
     if (!matchAnalyticsStarted || !matchAnalyticsClient) return;
     matchAnalyticsClient->reportGameStats("end", matchAnalyticsID, buildMatchAnalyticsPayload(true));
     // The client's worker drains the queued end event before joining. A failed
     // request is caught inside MetaServerClient and can never affect teardown.
     matchAnalyticsClient.reset();
     matchAnalyticsStarted = false;
+#endif
 }
 
 std::string Game::buildMatchAnalyticsPayload(bool finishedMatch) const {
@@ -791,6 +816,11 @@ std::string Game::buildMatchAnalyticsPayload(bool finishedMatch) const {
     const std::string mapName = getBasename(gameInitSettings.getFilename(), true);
     std::ostringstream payload;
     payload << "{\"schema_version\":3"
+#ifdef __EMSCRIPTEN__
+            << ",\"client_runtime\":\"browser\""
+#else
+            << ",\"client_runtime\":\"native\""
+#endif
             << ",\"game_type\":" << AITelemetry::Record::quote(analyticsGameType(gameInitSettings.getGameType()))
             << ",\"game_version\":" << AITelemetry::Record::quote(VERSION)
             << ",\"map\":{\"name\":" << AITelemetry::Record::quote(mapName)
@@ -1427,7 +1457,29 @@ void Game::handleClientStats(Uint32 clientId, Uint32 gameCycle, float avgFps, fl
     if(pNetworkManager == nullptr || !pNetworkManager->isServer()) {
         return;  // Only host processes client stats
     }
-    
+
+    // Advisory numbers from a peer: non-finite values poison every later comparison and a
+    // report from the future would defeat the staleness logic.
+    if(!std::isfinite(avgFps) || !std::isfinite(simMsAvg) || avgFps < 0.0f || simMsAvg < 0.0f) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "[PathBudget HOST] Ignoring non-finite stats from client %u", clientId);
+        return;
+    }
+    if(gameCycle > gameCycleCount + static_cast<Uint32>(kBudgetCheckInterval)) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "[PathBudget HOST] Ignoring stats from client %u for future cycle %u (current %u)",
+                    clientId, gameCycle, gameCycleCount);
+        return;
+    }
+
+    // One entry per connected client; a peer cannot grow this map.
+    if(clientStats.size() >= kMaxTrackedClients && clientStats.find(clientId) == clientStats.end()) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "[PathBudget HOST] Ignoring stats from client %u: tracking limit reached", clientId);
+        return;
+    }
+
+
     // Store client stats
     ClientPerformanceStats stats;
     stats.clientId = clientId;
@@ -1740,7 +1792,26 @@ void Game::resyncClientBudget(Uint32 clientId) {
 
 void Game::handleSetPathBudget(size_t newBudget, Uint32 applyCycle) {
     // ALL CLIENTS: Queue the budget change for deterministic application
-    
+
+    // The host schedules budget changes on interval boundaries in the near future. Anything
+    // else desynchronises the deterministic pathfinding schedule, so it is refused here even
+    // though the sender already had to be the host connection.
+    if(!PathBudgetSync::isAcceptableBudgetOrder(newBudget, applyCycle, gameCycleCount,
+                                                static_cast<uint32_t>(kBudgetCheckInterval),
+                                                kMinBudget, kMaxBudget)) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "[PathBudget] Refusing budget order %zu at cycle %u (current cycle %u)",
+                    newBudget, applyCycle, gameCycleCount);
+        return;
+    }
+
+    if(pendingBudgetChanges.size() >= PathBudgetSync::kMaxPendingBudgetChanges) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "[PathBudget] Refusing budget order: %zu changes already pending",
+                    pendingBudgetChanges.size());
+        return;
+    }
+
     // LOGGING: Inbound budget order from host
     SDL_Log("[PathBudget CLIENT] ← INBOUND from host: budget %zu → %zu (apply cycle %d, current cycle %d, delta=%d cycles)",
             negotiatedBudget, newBudget, applyCycle, gameCycleCount, 
@@ -2380,15 +2451,18 @@ void Game::doInput()
                 case SDL_MOUSEBUTTONDOWN: {
                     SDL_MouseButtonEvent* mouse = &event.button;
 
+                    bool interfaceHandled = false;
                     switch(mouse->button) {
                         case SDL_BUTTON_LEFT: {
-                            pInterface->handleMouseLeft(mouse->x, mouse->y, true);
+                            interfaceHandled = pInterface->handleMouseLeft(mouse->x, mouse->y, true);
                         } break;
 
                         case SDL_BUTTON_RIGHT: {
-                            pInterface->handleMouseRight(mouse->x, mouse->y, true);
+                            interfaceHandled = pInterface->handleMouseRight(mouse->x, mouse->y, true);
                         } break;
                     }
+
+                    if(interfaceHandled) break; // A UI click must not also place or command units.
 
                     switch(mouse->button) {
 
@@ -2510,14 +2584,20 @@ case CursorMode_Heal: {
                 case SDL_MOUSEBUTTONUP: {
                     SDL_MouseButtonEvent* mouse = &event.button;
 
+                    bool interfaceHandled = false;
                     switch(mouse->button) {
                         case SDL_BUTTON_LEFT: {
-                            pInterface->handleMouseLeft(mouse->x, mouse->y, false);
+                            interfaceHandled = pInterface->handleMouseLeft(mouse->x, mouse->y, false);
                         } break;
 
                         case SDL_BUTTON_RIGHT: {
-                            pInterface->handleMouseRight(mouse->x, mouse->y, false);
+                            interfaceHandled = pInterface->handleMouseRight(mouse->x, mouse->y, false);
                         } break;
+                    }
+
+                    if(interfaceHandled) {
+                        selectionMode = false;
+                        break;
                     }
 
                     if(selectionMode && (mouse->button == SDL_BUTTON_LEFT)) {
@@ -2703,7 +2783,7 @@ void Game::runMainLoop() {
         mapName = mapName.substr(0, lastDot);
     }
     
-    if (gameInitSettings.getGameType() == GameType::CustomMultiplayer || 
+    if (isNetworkGameType(gameInitSettings.getGameType()) ||
         gameInitSettings.getGameType() == GameType::LoadMultiplayer) {
         // Count human players from game init settings (not alive houses which can change during game)
         int humanPlayerCount = 0;
@@ -2878,8 +2958,13 @@ void Game::runMainLoop() {
                     frameTime = 0;
                 }
                 // Break out of loop to avoid spinning - we'll try again next frame
-                // Also add a small delay to avoid burning CPU
+                // Also add a small delay to avoid burning CPU. Not in the browser: see
+                // handleNetworkUpdates(). This loop has just given up on the cycle, the frame
+                // ends in WebRuntime::yieldToBrowser(), and an ASYNCIFY sleep here would only
+                // add a second stack unwind to the same wait.
+#ifndef __EMSCRIPTEN__
                 SDL_Delay(1);
+#endif
                 break;
             }
         }
@@ -3331,7 +3416,12 @@ void Game::updateGameState() {
     if(takePeriodicalScreenshots && ((gameCycleCount % (MILLI2CYCLES(10*1000))) == 0)) {
         takeScreenshot();
     }
-    
+
+    // Taken here, at a precise point in the simulation: cycle gameCycleCount-1 is fully applied
+    // and the counter has just become gameCycleCount. Every peer reaches this same point for
+    // the same cycle, which is what makes two digests comparable at all.
+    updateStateDigests();
+
     musicPlayer->musicCheck();
 }
 
@@ -3358,6 +3448,7 @@ void Game::initializeReplay() {
 
 void Game::initializeNetwork() {
     if(pNetworkManager != nullptr) {
+        pNetworkManager->beginSimulation(gameInitSettings.getRandomSeed());
         pNetworkManager->setOnReceiveChatMessage(
             std::bind(&ChatManager::addChatMessage, &(pInterface->getChatManager()), 
             std::placeholders::_1, std::placeholders::_2));
@@ -3379,18 +3470,52 @@ void Game::initializeNetwork() {
         pNetworkManager->setOnReceiveSetPathBudget(
             std::bind(&Game::handleSetPathBudget, this,
             std::placeholders::_1, std::placeholders::_2));
-        
-        // Network buffer: RTT-based + 5 cycles padding
-        // LAN games: Use RTT-based (typically 5 cycles = 100ms)
-        // Internet games: Use minimum of 10 cycles (200ms) to handle jitter
-        const int rttBuffer = MILLI2CYCLES(pNetworkManager->getMaxPeerRoundTripTime()) + 5;
-        const int minInternetBuffer = 10;  // 200ms minimum for internet
-        const bool isLAN = pNetworkManager->isLANServer();
-        const int networkBuffer = isLAN ? rttBuffer : std::max(rttBuffer, minInternetBuffer);
+
+        // Deterministic state digests travel in the relay diagnostic envelope, not as a game
+        // packet, so the ENet wire format and NETWORK_PROTOCOL_VERSION are untouched.
+        pNetworkManager->setOnReceiveRelayDiagnostic(
+            [this](const std::string& peerName, std::uint8_t kind, const std::uint8_t* payload,
+                   std::size_t length) {
+                if(kind != static_cast<std::uint8_t>(RoomRelay::DiagnosticKind::StateDigest)) {
+                    return;
+                }
+                GameStateDigest::Digest digest;
+                if(!GameStateDigest::decode(payload, length, digest)) {
+                    SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                                "Game: unusable state digest from '%s'", peerName.c_str());
+                    return;
+                }
+                onRemoteStateDigest(peerName, digest);
+            });
+
+        localStateDigests.clear();
+        pendingRemoteDigests.clear();
+        stateDivergenceReported = false;
+        lockstepStallReported = false;
+        lastStateDigestCycle = 0;
+
+        // Fix the relay allowance at match start. Moving it backwards later could put new
+        // input into a cycle the other peer has already processed.
+        Uint32 networkBuffer = 0;
+        if(pNetworkManager->isRelayHttpPollingSession()) {
+            const Uint32 relayRoundTripMs = pNetworkManager->getRelayServerRoundTripTimeMs();
+            const int gameSpeedMs = getGameSpeed();
+            networkBuffer = CommandBufferPolicy::relayCommandBufferCycles(relayRoundTripMs, gameSpeedMs);
+            SDL_Log("Network buffer set to %u cycles (relay hop: %ums%s, allowance: %ums, %dms per cycle)",
+                    static_cast<unsigned>(networkBuffer), static_cast<unsigned>(relayRoundTripMs),
+                    relayRoundTripMs == 0 ? " - not sampled yet" : "",
+                    static_cast<unsigned>(networkBuffer * gameSpeedMs), gameSpeedMs);
+        } else {
+            // Preserve the existing ENet and WebSocket RTT formula and Internet minimum.
+            const int rttBuffer = MILLI2CYCLES(pNetworkManager->getMaxPeerRoundTripTime()) + 5;
+            const bool isLAN = pNetworkManager->isLANServer();
+            networkBuffer = isLAN ? rttBuffer : std::max(rttBuffer, 10);
+            SDL_Log("Network buffer set to %u cycles (RTT: %dms, %s)",
+                    static_cast<unsigned>(networkBuffer), pNetworkManager->getMaxPeerRoundTripTime(),
+                    isLAN ? "LAN" : "Internet");
+        }
+
         cmdManager.setNetworkCycleBuffer(networkBuffer);
-        SDL_Log("Network buffer set to %d cycles (RTT: %dms, %s)", 
-                networkBuffer, pNetworkManager->getMaxPeerRoundTripTime(),
-                isLAN ? "LAN" : "Internet");
     }
 }
 
@@ -3398,6 +3523,10 @@ void Game::initializeNetwork() {
 void Game::resumeGame()
 {
     bMenu = false;
+    // Relay menus never stop lockstep, so closing one must not enqueue a resume command.
+    if(pNetworkManager != nullptr && pNetworkManager->isRelaySession()) {
+        return;
+    }
     bPause = false;
     
     // Notify other players in multiplayer that we resumed
@@ -3413,6 +3542,11 @@ void Game::resumeGame()
 }
 
 void Game::pauseGame() {
+    // A local pause freezes the cycle that would transmit the pause command itself.
+    // Until a synchronized pause protocol exists, relay games continue behind menus.
+    if(pNetworkManager != nullptr && pNetworkManager->isRelaySession()) {
+        return;
+    }
     bPause = true;
     
     // Notify other players in multiplayer that we paused
@@ -3652,7 +3786,7 @@ void Game::onOptions()
         quitGame();
     } else {
         Uint32 color = getHouseColorRGB(getHouseVisualHouse(pLocalHouse->getHouseID()), 3);
-        pInGameMenu = std::make_unique<InGameMenu>((gameType == GameType::CustomMultiplayer), color);
+        pInGameMenu = std::make_unique<InGameMenu>((isNetworkGameType(gameType)), color);
         bMenu = true;
         pauseGame();
     }
@@ -3713,6 +3847,22 @@ void Game::onMentat()
     pauseGame();
 }
 
+bool Game::canSkipMission() const {
+    return !bReplay && !finished && !bQuitGame && pLocalPlayer && pLocalHouse
+        && CampaignControls::maySkip(gameInitSettings.getGameType(), gameInitSettings.getHouseID(),
+                                     pLocalHouse->getHouseID(), true);
+}
+
+void Game::onSkipMission() {
+    if(canSkipMission()) cmdManager.addCommand(Command(pLocalPlayer->getPlayerID(), CMD_CAMPAIGN_SKIP));
+}
+
+void Game::onFeedback() {
+    pInGameMenu = std::make_unique<FeedbackWindow>();
+    bMenu = true;
+    pauseGame();
+}
+
 void Game::onCityBudget()
 {
     if (!citySimulation_ || !citySimulation_->isInitialized()) {
@@ -3730,6 +3880,7 @@ GameInitSettings Game::getNextGameInitSettings()
     }
 
     switch(gameInitSettings.getGameType()) {
+        case GameType::CampaignCoop:
         case GameType::Campaign: {
             int currentMission = gameInitSettings.getMission();
             if(!won) {
@@ -3747,7 +3898,17 @@ GameInitSettings Game::getNextGameInitSettings()
             }
 
             Uint32 alreadyShownTutorialHints = won ? pLocalPlayer->getAlreadyShownTutorialHints() : gameInitSettings.getAlreadyShownTutorialHints();
-            return GameInitSettings(gameInitSettings, nextMission, alreadyPlayedRegions, alreadyShownTutorialHints);
+            GameInitSettings next(gameInitSettings, nextMission, alreadyPlayedRegions, alreadyShownTutorialHints);
+            if(next.getGameType() == GameType::CampaignCoop) {
+                auto file = pFileManager->openCampaignFile(next.getFilename());
+                const auto size = SDL_RWsize(file.get());
+                if(size <= 0) THROW(std::runtime_error, "Cannot read next co-op mission.");
+                std::string data(static_cast<size_t>(size), '\0');
+                if(SDL_RWread(file.get(), data.data(), 1, data.size()) != data.size())
+                    THROW(std::runtime_error, "Incomplete next co-op mission.");
+                next.setScenarioData(data);
+            }
+            return next;
         } break;
 
         default: {
@@ -3771,6 +3932,7 @@ int Game::whatNext()
     }
 
     switch(gameType) {
+        case GameType::CampaignCoop:
         case GameType::Campaign: {
             if(bQuitGame == true) {
                 return GAME_RETURN_TO_MENU;
@@ -3791,6 +3953,7 @@ int Game::whatNext()
             }
         } break;
 
+        case GameType::SkirmishCoop:
         case GameType::Skirmish: {
             if(bQuitGame == true) {
                 return GAME_RETURN_TO_MENU;
@@ -3915,7 +4078,9 @@ bool Game::loadSaveGame(InputStream& stream) {
     }
 
     // if this is a multiplayer load we need to save some information before we overwrite gameInitSettings with the settings saved in the savegame
-    bool bMultiplayerLoad = (gameInitSettings.getGameType() == GameType::LoadMultiplayer);
+    const bool bCoopLoad = gameInitSettings.getGameType() == GameType::LoadCoop;
+    const std::string coopServer = gameInitSettings.getServername();
+    bool bMultiplayerLoad = (gameInitSettings.getGameType() == GameType::LoadMultiplayer || bCoopLoad);
     GameInitSettings::HouseInfoList oldHouseInfoList = gameInitSettings.getHouseInfoList();
 
     // read gameInitSettings
@@ -3924,6 +4089,8 @@ bool Game::loadSaveGame(InputStream& stream) {
     if(savegameVersion <= 9820) {
         gameInitSettings.migrateLegacyHouseColorSlots();
     }
+
+    const bool savedNetworkLayout = isNetworkGameType(gameInitSettings.getGameType());
 
     // read the actual house setup choosen at the beginning of the game
     logLoadStage("house setup");
@@ -4014,6 +4181,19 @@ bool Game::loadSaveGame(InputStream& stream) {
 
     // we have to set the local player
     logLoadStage("local player and flags");
+    // Single-player saves contain a local-player byte even when hosted online.
+    Uint8 savedLocalPlayerID = 0;
+    if(!savedNetworkLayout) savedLocalPlayerID = stream.readUint8();
+    if(bCoopLoad) {
+        for(const auto& info : oldHouseInfoList) {
+            if(info.houseID != gameInitSettings.getHouseID()) continue;
+            House* shared = getHouse(info.houseID);
+            if(!shared) THROW(std::runtime_error, "The saved player house no longer exists.");
+            std::vector<std::pair<std::string, std::string>> desired;
+            for(const auto& player : info.playerInfoList) desired.emplace_back(player.playerName, player.playerClass);
+            shared->configureCoopPlayers(desired);
+        }
+    }
     if(bMultiplayerLoad) {
         // get it from the gameInitSettings that started the game (not the one saved in the savegame)
         for(const GameInitSettings::HouseInfo& houseInfo : oldHouseInfoList) {
@@ -4053,10 +4233,11 @@ bool Game::loadSaveGame(InputStream& stream) {
         }
     } else {
         // it is stored in the savegame, so set it up
-        Uint8 localPlayerID = stream.readUint8();
-        pLocalPlayer = dynamic_cast<HumanPlayer*>(getPlayerByID(localPlayerID));
+        pLocalPlayer = dynamic_cast<HumanPlayer*>(getPlayerByID(savedLocalPlayerID));
         pLocalHouse = house[pLocalPlayer->getHouse()->getHouseID()].get();
     }
+
+    if(!pLocalPlayer || !pLocalHouse) THROW(std::runtime_error, "Cannot assign the local co-op player.");
 
     debug = stream.readBool();
     bCheatsEnabled = stream.readBool();
@@ -4137,18 +4318,15 @@ bool Game::loadSaveGame(InputStream& stream) {
     }
 
     logLoadStage("selection and screen position");
-    if(bMultiplayerLoad) {
-        screenborder->adjustScreenBorderToMapsize(currentGameMap->getSizeX(), currentGameMap->getSizeY());
-
-        screenborder->setNewScreenCenter(pLocalHouse->getCenterOfMainBase()*TILESIZE);
-
-    } else {
-        //load selection list
+    screenborder->adjustScreenBorderToMapsize(currentGameMap->getSizeX(), currentGameMap->getSizeY());
+    if(!savedNetworkLayout) {
         selectedList = stream.readUint32Set();
-
-        //load the screenborder info
-        screenborder->adjustScreenBorderToMapsize(currentGameMap->getSizeX(), currentGameMap->getSizeY());
         screenborder->load(stream);
+    }
+    if(bMultiplayerLoad) {
+        unselectAll(selectedList);
+        selectedList.clear();
+        screenborder->setNewScreenCenter(pLocalHouse->getCenterOfMainBase()*TILESIZE);
     }
 
     // load city simulation state (version 9807+)
@@ -4189,6 +4367,16 @@ bool Game::loadSaveGame(InputStream& stream) {
     logLoadStage("command history");
     cmdManager.load(stream);
 
+    if(bCoopLoad) {
+        const bool campaign = isCampaignGameType(gameInitSettings.getGameType());
+        gameInitSettings.enableCoop(campaign, coopServer);
+        gameInitSettings.clearHouseInfo();
+        for(const auto& info : oldHouseInfoList) gameInitSettings.addHouseInfo(info);
+        for(auto& actual : houseInfoListSetup)
+            for(const auto& requested : oldHouseInfoList)
+                if(actual.houseID == requested.houseID) actual.playerInfoList = requested.playerInfoList;
+        gameType = gameInitSettings.getGameType();
+    }
     logLoadStage("complete");
     finished = false;
 
@@ -4276,7 +4464,7 @@ bool Game::saveGame(const std::string& filename)
         }
     }
 
-    if(gameInitSettings.getGameType() != GameType::CustomMultiplayer) {
+    if(!isNetworkGameType(gameInitSettings.getGameType())) {
         fs.writeUint8(pLocalPlayer->getPlayerID());
     }
 
@@ -4301,7 +4489,7 @@ bool Game::saveGame(const std::string& filename)
         pExplosion->save(fs);
     }
 
-    if(gameInitSettings.getGameType() != GameType::CustomMultiplayer) {
+    if(!isNetworkGameType(gameInitSettings.getGameType())) {
         // save selection lists
 
         // write out selected units list
@@ -4471,9 +4659,14 @@ void Game::onReceiveSelectionList(const std::string& name, const std::set<Uint32
                 pObject->setSelectedByOtherPlayer(true);
             }
         }
-    } else {
+    } else if(groupListIndex >= 0 && groupListIndex < NUMSELECTEDLISTS) {
         // some other player has assigned a number to a list of units
         pHumanPlayer->setGroupList(groupListIndex, newSelectionList);
+    } else {
+        // setGroupList() indexes a fixed-size array; the network boundary rejects this too.
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Game: ignoring selection list from '%s' with group index %d",
+                    name.c_str(), groupListIndex);
     }
 }
 
@@ -4606,32 +4799,32 @@ void Game::handleChatInput(SDL_KeyboardEvent& keyboardEvent) {
             } else if((bCheatsEnabled == true) && (md5string == "0xB8766C8EC7A61036B69893FC17AAF21E")) {
                 pInterface->getChatManager().addInfoMessage("Cheat mode already enabled");
             } else if((bCheatsEnabled == true) && (md5string == "0x57583291CB37F8167EDB0611D8D19E58")) {
-                if (gameType != GameType::CustomMultiplayer) {
+                if (!isNetworkGameType(gameType)) {
                     pInterface->getChatManager().addInfoMessage("You win this game");
                     setGameWon();
                 }
             } else if((bCheatsEnabled == true) && (md5string == "0x1A12BE3DBE54C5A504CAA6EE9782C1C8")) {
                 if(debug == true) {
                     pInterface->getChatManager().addInfoMessage("You are already in debug mode");
-                } else if (gameType != GameType::CustomMultiplayer) {
+                } else if (!isNetworkGameType(gameType)) {
                     pInterface->getChatManager().addInfoMessage("Debug mode enabled");
                     debug = true;
                 }
             } else if((bCheatsEnabled == true) && (md5string == "0x54F68155FC64A5BC66DCD50C1E925C0B")) {
                 if(debug == false) {
                     pInterface->getChatManager().addInfoMessage("You are not in debug mode");
-                } else if (gameType != GameType::CustomMultiplayer) {
+                } else if (!isNetworkGameType(gameType)) {
                     pInterface->getChatManager().addInfoMessage("Debug mode disabled");
                     debug = false;
                 }
             } else if((bCheatsEnabled == true) && (md5string == "0xCEF1D26CE4B145DE985503CA35232ED8")) {
-                if (gameType != GameType::CustomMultiplayer) {
+                if (!isNetworkGameType(gameType)) {
                     pInterface->getChatManager().addInfoMessage("You got some credits");
                     pLocalHouse->returnCredits(10000);
                 }
             } else if(md5string == "0x05362BF626E467A93FFE6FF0D8A899E3") {
                 // Toggle immortality cheat (muaddib) - works in single-player only, no cheat mode required
-                if (gameType != GameType::CustomMultiplayer && gameType != GameType::LoadMultiplayer) {
+                if (!isNetworkGameType(gameType) && gameType != GameType::LoadMultiplayer) {
                     bool currentState = gameInitSettings.getGameOptions().immortalHumanPlayer;
                     gameInitSettings.setImmortalHumanPlayer(!currentState);
                     if(!currentState) {
@@ -4760,7 +4953,7 @@ void Game::handleKeyInput(SDL_KeyboardEvent& keyboardEvent) {
 
         case SDLK_KP_MINUS:
         case SDLK_MINUS: {
-            if(gameType != GameType::CustomMultiplayer) {
+            if(!isNetworkGameType(gameType)) {
                 settings.gameOptions.gameSpeed = std::min(settings.gameOptions.gameSpeed+1,GAMESPEED_MAX);
                 INIFile myINIFile(getConfigFilepath());
                 myINIFile.setIntValue("Game Options","Game Speed", settings.gameOptions.gameSpeed);
@@ -4772,7 +4965,7 @@ void Game::handleKeyInput(SDL_KeyboardEvent& keyboardEvent) {
         case SDLK_KP_PLUS:
         case SDLK_PLUS:
         case SDLK_EQUALS: {
-            if(gameType != GameType::CustomMultiplayer) {
+            if(!isNetworkGameType(gameType)) {
                 settings.gameOptions.gameSpeed = std::max(settings.gameOptions.gameSpeed-1,GAMESPEED_MIN);
                 INIFile myINIFile(getConfigFilepath());
                 myINIFile.setIntValue("Game Options","Game Speed", settings.gameOptions.gameSpeed);
@@ -4847,21 +5040,21 @@ void Game::handleKeyInput(SDL_KeyboardEvent& keyboardEvent) {
 
         case SDLK_F4: {
             // skip a 30 seconds
-            if(gameType != GameType::CustomMultiplayer || bReplay) {
+            if(!isNetworkGameType(gameType) || bReplay) {
                 skipToGameCycle = gameCycleCount + (10*1000)/GAMESPEED_DEFAULT;
             }
         } break;
 
         case SDLK_F5: {
             // skip a 30 seconds
-            if(gameType != GameType::CustomMultiplayer || bReplay) {
+            if(!isNetworkGameType(gameType) || bReplay) {
                 skipToGameCycle = gameCycleCount + (30*1000)/GAMESPEED_DEFAULT;
             }
         } break;
 
         case SDLK_F6: {
             // skip 2 minutes
-            if(gameType != GameType::CustomMultiplayer || bReplay) {
+            if(!isNetworkGameType(gameType) || bReplay) {
                 skipToGameCycle = gameCycleCount + (120*1000)/GAMESPEED_DEFAULT;
             }
         } break;
@@ -5022,7 +5215,11 @@ void Game::handleKeyInput(SDL_KeyboardEvent& keyboardEvent) {
         } break;
 
         case SDLK_SPACE: {
-            bool isMultiplayer = (gameType == GameType::CustomMultiplayer);
+            if(pNetworkManager != nullptr && pNetworkManager->isRelaySession()) {
+                pInterface->getChatManager().addInfoMessage(_("Online games cannot be paused."));
+                break;
+            }
+            bool isMultiplayer = (isNetworkGameType(gameType));
 
             if(bPause) {
                 resumeGame();
@@ -5749,7 +5946,7 @@ void Game::selectNextStructureOfType(const std::set<Uint32>& itemIDs) {
 }
 
 int Game::getGameSpeed() const {
-    if(gameType == GameType::CustomMultiplayer) {
+    if(isNetworkGameType(gameType)) {
         return gameInitSettings.getGameOptions().gameSpeed;
     } else {
         return settings.gameOptions.gameSpeed;
@@ -5760,10 +5957,10 @@ bool Game::handleNetworkUpdates() {
     if(pNetworkManager == nullptr) {
         return false;
     }
-    
+
     pNetworkManager->update();
     bool bWaitForNetwork = false;
-    
+
     // Check for network delays
     for(const std::string& playername : pNetworkManager->getConnectedPeers()) {
         HumanPlayer* pPlayer = dynamic_cast<HumanPlayer*>(getPlayerByName(playername));
@@ -5772,17 +5969,43 @@ bool Game::handleNetworkUpdates() {
             break;
         }
     }
-    
+
     if(bWaitForNetwork) {
         if(startWaitingForOtherPlayersTime == 0) {
             startWaitingForOtherPlayersTime = SDL_GetTicks();
-        } else if(SDL_GetTicks() - startWaitingForOtherPlayersTime > 1000) {
-            if(pWaitingForOtherPlayers == nullptr) {
-                pWaitingForOtherPlayers = std::make_unique<WaitingForOtherPlayers>();
-                bMenu = true;
+        } else {
+            const Uint32 waitedMs = SDL_GetTicks() - startWaitingForOtherPlayersTime;
+            if(waitedMs > 1000) {
+                if(pWaitingForOtherPlayers == nullptr) {
+                    pWaitingForOtherPlayers = std::make_unique<WaitingForOtherPlayers>();
+                    bMenu = true;
+                }
+            }
+
+            // Lockstep has to end somewhere. Without this the match waits forever for a player
+            // whose tab was suspended or whose connection died quietly, with nothing on screen
+            // but "waiting for other players". Ending it visibly is the honest outcome; a
+            // player's commands are never skipped to keep the match moving, because that is a
+            // silent desynchronisation.
+            if(pNetworkManager->isRelaySession()
+               && waitedMs > LOCKSTEP_STALL_TIMEOUT_MS && !lockstepStallReported) {
+                lockstepStallReported = true;
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                             "Game: no commands from another player for %u ms at cycle %u - "
+                             "ending the match", static_cast<unsigned>(waitedMs),
+                             static_cast<unsigned>(gameCycleCount));
+                addUrgentMessageToNewsTicker(
+                    _("Another player stopped responding. The game has ended."));
+                pNetworkManager->disconnect();
+                quitGame();
             }
         }
+#ifndef __EMSCRIPTEN__
         SDL_Delay(1);  // Reduced from 10ms to 1ms to improve host performance
+#endif
+        // Browser SDL_Delay suspends the Asyncify stack and resumes through a timer.
+        // The frame-end yield already gives the browser an event-loop turn; additional
+        // timers here and in the wait branch add overhead during every lockstep stall.
     } else {
         startWaitingForOtherPlayersTime = 0;
         if(pWaitingForOtherPlayers != nullptr) {
@@ -5792,8 +6015,120 @@ bool Game::handleNetworkUpdates() {
             }
         }
     }
-    
+
     return bWaitForNetwork;
+}
+
+GameStateDigest::Digest Game::computeStateDigest() const {
+    GameStateDigest::Digest digest;
+    digest.gameCycle  = gameCycleCount;
+    digest.randomSeed = randomGen.getSeed();
+
+    GameStateDigest::Hasher houses;
+    for(int houseID = 0; houseID < NUM_HOUSES; houseID++) {
+        const House* pHouse = house[houseID].get();
+        houses.mixUint8(static_cast<Uint8>(houseID));
+        houses.mixUint8(pHouse != nullptr ? 1 : 0);
+        if(pHouse == nullptr) {
+            continue;
+        }
+        houses.mixInt32(pHouse->getCredits());
+        houses.mixInt32(pHouse->getNumStructures());
+        houses.mixInt32(pHouse->getNumUnits());
+    }
+    digest.houseHash = houses.value();
+
+    GameStateDigest::Hasher objects;
+    Uint32 objectCount = 0;
+    objectManager.forEachObject([&](Uint32 objectID, const ObjectBase* pObject) {
+        if(pObject == nullptr) {
+            return;
+        }
+        objectCount++;
+        objects.mixUint32(objectID);
+        objects.mixInt32(pObject->getItemID());
+        objects.mixInt32(pObject->getOriginalHouseID());
+        const House* pOwner = pObject->getOwner();
+        objects.mixInt32(pOwner != nullptr ? pOwner->getHouseID() : -1);
+        objects.mixInt64(static_cast<std::int64_t>(pObject->getHealth().getRawValue()));
+        objects.mixInt32(pObject->getLocation().x);
+        objects.mixInt32(pObject->getLocation().y);
+    });
+    digest.objectHash  = objects.value();
+    digest.objectCount = objectCount;
+
+    return digest;
+}
+
+void Game::updateStateDigests() {
+    if(pNetworkManager == nullptr || !pNetworkManager->isRelaySession()) {
+        return;
+    }
+    if(gameCycleCount == 0 || (gameCycleCount % GameStateDigest::kDigestIntervalCycles) != 0) {
+        return;
+    }
+    if(gameCycleCount == lastStateDigestCycle) {
+        return;
+    }
+    lastStateDigestCycle = gameCycleCount;
+
+    const GameStateDigest::Digest digest = computeStateDigest();
+
+    localStateDigests.push_back(digest);
+    while(localStateDigests.size() > GameStateDigest::kDigestHistory) {
+        localStateDigests.pop_front();
+    }
+
+    Uint8 encoded[GameStateDigest::kEncodedSize];
+    GameStateDigest::encode(digest, encoded);
+    pNetworkManager->sendRelayDiagnostic(RoomRelay::DiagnosticKind::StateDigest, encoded,
+                                         sizeof(encoded));
+
+    // Anything a peer sent for this cycle before we reached it can be resolved now.
+    for(auto iterator = pendingRemoteDigests.begin(); iterator != pendingRemoteDigests.end();) {
+        if(iterator->second.gameCycle == digest.gameCycle) {
+            if(digest.divergesFrom(iterator->second)) {
+                reportStateDivergence(iterator->first, digest, iterator->second);
+            }
+            iterator = pendingRemoteDigests.erase(iterator);
+        } else {
+            ++iterator;
+        }
+    }
+}
+
+void Game::onRemoteStateDigest(const std::string& peerName,
+                               const GameStateDigest::Digest& digest) {
+    for(const GameStateDigest::Digest& ours : localStateDigests) {
+        if(ours.gameCycle == digest.gameCycle) {
+            if(ours.divergesFrom(digest)) {
+                reportStateDivergence(peerName, ours, digest);
+            }
+            return;
+        }
+    }
+
+    // Their cycle is one we have not produced yet: keep it, bounded, until we do.
+    pendingRemoteDigests.emplace_back(peerName, digest);
+    while(pendingRemoteDigests.size() > GameStateDigest::kDigestHistory) {
+        pendingRemoteDigests.pop_front();
+    }
+}
+
+void Game::reportStateDivergence(const std::string& peerName,
+                                 const GameStateDigest::Digest& ours,
+                                 const GameStateDigest::Digest& theirs) {
+    if(stateDivergenceReported) {
+        return;
+    }
+    stateDivergenceReported = true;
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                 "Game: state digest mismatch with '%s' - local %s, remote %s",
+                 peerName.c_str(), GameStateDigest::describe(ours).c_str(),
+                 GameStateDigest::describe(theirs).c_str());
+
+    addUrgentMessageToNewsTicker(
+        _("This game is no longer identical for every player. Results may differ."));
 }
 
 void Game::dumpCombatStats() {

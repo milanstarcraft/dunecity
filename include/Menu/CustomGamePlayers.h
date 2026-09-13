@@ -19,6 +19,8 @@
 #define CUSTOMGAMEPLAYERS_H
 
 #include <GameInitSettings.h>
+#include <Menu/PlaySetup.h>
+#include <Menu/LobbyAuthorization.h>
 
 #include <GUI/StaticContainer.h>
 #include <GUI/VBox.h>
@@ -49,10 +51,26 @@ class INIFile;
 class CustomGamePlayers : public MenuBase
 {
 public:
-    CustomGamePlayers(const GameInitSettings& newGameInitSettings, bool server = true, bool LANServer = true);
+    CustomGamePlayers(const GameInitSettings& newGameInitSettings, bool server = true, bool LANServer = true, CustomPlaySetup* setup = nullptr, const ChangeEventList* initialPlayers = nullptr);
     virtual ~CustomGamePlayers();
+    int showMenu() override;
 
-    void onReceiveChangeEventList(const ChangeEventList& changeEventList);
+    /**
+        Applies a change event list. On the host the list is a *request* from senderName and is
+        authorized against the seat that player holds before anything is applied; on a client it
+        is the host's authoritative view. An empty senderName means "local/host origin".
+        \param  senderName          bound peer name of the sender, empty for host-originated
+        \param  changeEventList     the requested or authoritative changes
+    */
+    void onReceiveChangeEventList(const std::string& senderName, const ChangeEventList& changeEventList);
+
+    /// Applies a host-originated change event list (no remote sender to authorize).
+    void onReceiveChangeEventList(const ChangeEventList& changeEventList) {
+        onReceiveChangeEventList(std::string(), changeEventList);
+    }
+
+    /// Builds the current seat occupancy, used to authorize client lobby requests.
+    LobbyAuthorization::SeatSnapshot makeSeatSnapshot() const;
 
     ChangeEventList getChangeEventListForNewPlayer(const std::string& newPlayerName);
 
@@ -60,6 +78,15 @@ public:
 
 private:
     ChangeEventList getChangeEventList();
+    void onChildWindowClose(Window* child) override;
+    void rebuildSetup(bool keepPlayers);
+    CustomPlaySetup* setup = nullptr;
+    bool restoringSetup = false;
+    HBox setupMapRow, setupModeRow;
+    DropDownBox setupMap, setupMod, setupConnection, setupVisibility;
+    Checkbox setupShared;
+    TextButton setupRules, setupBrowseMaps;
+    Label readinessLabel;
 
     void onReceiveChatMessage(const std::string& name, const std::string& message);
     void onConfigMismatch(const std::string& errorMessage);
@@ -100,6 +127,7 @@ private:
 
     void disableAllDropDownBoxes();
 
+    GameInitSettings::HouseInfoList fixedCoopHouses;
     GameInitSettings                gameInitSettings;
     GameInitSettings::HouseInfoList houseInfoListSetup;     ///< only used if we are loading a savegame
 
@@ -107,6 +135,8 @@ private:
     VBox            mainVBox;
 
     Label           captionLabel;
+    HBox            captionHBox;
+    TextButton      copyCodeButton;
 
     HBox            mainHBox;
 
@@ -154,6 +184,8 @@ private:
         DropDownBox     player2DropDown;
     };
 
+    LobbyAuthorization::SeatSnapshot editableSeats;
+    std::array<int, MAX_CUSTOM_GAME_PLAYERS * 2> lastPlayerSelections{};
     bool                    bServer;
     bool                    bLANServer;
     HouseInfo               houseInfo[MAX_CUSTOM_GAME_PLAYERS];

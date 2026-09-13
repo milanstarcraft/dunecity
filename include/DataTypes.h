@@ -153,9 +153,25 @@ enum class GameType {
     CustomGame        = 2,
     Skirmish          = 3,
     CustomMultiplayer = 4,
-    LoadMultiplayer   = 5
+    LoadMultiplayer   = 5,
+    CampaignCoop     = 6,
+    SkirmishCoop     = 7,
+    LoadCoop         = 8
 };
 
+
+constexpr bool isCoopGameType(GameType type) {
+    return type == GameType::CampaignCoop || type == GameType::SkirmishCoop || type == GameType::LoadCoop;
+}
+constexpr bool isNetworkGameType(GameType type) {
+    return type == GameType::CustomMultiplayer || type == GameType::LoadMultiplayer || isCoopGameType(type);
+}
+constexpr bool isCampaignGameType(GameType type) {
+    return type == GameType::Campaign || type == GameType::CampaignCoop;
+}
+constexpr bool isScenarioGameType(GameType type) {
+    return isCampaignGameType(type) || type == GameType::Skirmish || type == GameType::SkirmishCoop;
+}
 
 class SettingsClass
 {
@@ -205,6 +221,33 @@ public:
         int         serverPort;
         std::string metaServer;
         bool        debugNetwork;
+        /// Base URL of the crossplay room relay; empty means crossplay is not configured.
+        std::string relayEndpoint;
+        /// Loopback relay used for local testing; only reachable when the option below is on.
+        std::string relayDevelopmentEndpoint;
+        /// When set, the loopback relay is used and plain ws:// to loopback becomes acceptable.
+        bool        relayUseDevelopmentEndpoint = false;
+
+        /// Base URL of the direct-play signaling service; empty means direct play is off.
+        std::string directEndpoint;
+        /// Loopback signaling service for local testing; only reachable with the option below.
+        std::string directDevelopmentEndpoint;
+
+        /// The relay address this session should use, honouring the development option.
+        std::string activeRelayEndpoint() const {
+            return relayUseDevelopmentEndpoint ? relayDevelopmentEndpoint : relayEndpoint;
+        }
+
+        /**
+            The signaling address a direct session should use.
+
+            Shares the development opt-in with the relay setting, because it is the same
+            decision - "use the service running on this computer" - and having two switches for
+            it would let a player end up half on one and half on the other.
+        */
+        std::string activeDirectEndpoint() const {
+            return relayUseDevelopmentEndpoint ? directDevelopmentEndpoint : directEndpoint;
+        }
     } network;
 
     class DiscordClass {

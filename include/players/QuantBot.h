@@ -27,6 +27,7 @@
 #include <units/MCV.h>
 class Harvester;
 #include <players/QuantBotConfig.h>
+#include <players/CampaignDifficultyPolicy.h>
 #include <players/AIDecisionLog.h>
 
 #include <DataTypes.h>
@@ -104,8 +105,10 @@ private:
     Sint32  attackTimer;    ///< When to build the next structure/unit
     Sint32  retreatTimer;   ///< When you last retreated>
 
-    int initialItemCount[Num_ItemID];
-    int initialMilitaryValue = 0;
+    int initialItemCount[Num_ItemID]{};
+    // Negative until the first update, after scenario/save objects are loaded.
+    // This sentinel also survives saving before a newly added partner updates.
+    int initialMilitaryValue = -1;
     int militaryValueLimit = 0;
     int harvesterLimit = 4;
     int lastCalculatedSpice = 0;
@@ -117,8 +120,23 @@ private:
     Coord groundSquadProgressLocation = Coord::Invalid();
     UnitMixPolicy::PerformanceHistory performanceHistory;
     std::set<Uint32> groundSquad;
-    std::map<Uint32, Uint32> manualUnitOrders, escortAssignments;
+    std::map<Uint32, Uint32> manualUnitOrders, defenceAssignments;
     void launchGroundHunt();
+    CampaignDifficultyPolicy::Wave campaignWave;
+    bool isCampaignEnemy() const;
+    std::vector<const QuantBot*> campaignAlliance() const;
+    CampaignDifficultyPolicy::Profile campaignProfile() const;
+    CampaignDifficultyPolicy::Pressure campaignPressure() const;
+    bool campaignCanLaunch() const;
+    int campaignRequiredArmy(int configuredThreshold) const;
+    bool campaignCombatUnit(const UnitBase* unit) const;
+    bool campaignLocalContact(const ObjectBase* target) const;
+    bool campaignDefensiveContact(const UnitBase* unit, const ObjectBase* target) const;
+    bool campaignControlsUnit(const UnitBase* unit);
+    bool scoutCampaignFront(const UnitBase* unit);
+    void updateCampaignWave();
+    void holdCampaignUnit(const UnitBase* unit);
+    const ObjectBase* campaignObjective(const UnitBase* unit, int group) const;
     void releaseLegacyGroundSquad();
     std::map<Uint32,Uint32> defenceResponseCycles;
     bool humanControls(const UnitBase* unit) const;
@@ -131,6 +149,7 @@ private:
     Coord squadRetreatLocation = Coord::Invalid();
     bool supportMode = false;
     Uint32 lastStatsLogCycle = 0;
+    Uint32 lastPoliceBudgetReviewCycle = 0;
     Uint32 lastTelemetrySnapshotCycle = 0;
     Uint32 lastCityBuildingSnapshotCycle = 0;
     uint64_t telemetryState = 0; // Runtime only; never part of save/simulation state.
@@ -141,6 +160,7 @@ private:
     std::map<Uint32, uint64_t> lastHarvesterSafetyTrace;
     std::map<Uint32, std::pair<uint64_t, Uint32>> lastHeavyAllocationTrace;
     std::map<Uint32, AITelemetry::Record> placementScoreDetails;
+    std::map<Uint32, Uint32> lastEconomyTraceCycle;
     std::map<Uint32, uint64_t> zoneDecisionIds;
     std::map<Uint32, Uint32> lastZoneTraceCycle;
     uint64_t traceDecision(const std::string& event, AITelemetry::Record details) const;
@@ -155,6 +175,13 @@ private:
 
 
     Coord findMcvPlaceLocation(const MCV* pMCV);
+    Coord findRockExpansionSite(const MCV* mcv = nullptr);
+    Uint32 rockSurveyCycle = std::numeric_limits<Uint32>::max();
+    Coord rockExpansionSite = Coord::Invalid();
+    int availableBaseRock = 0;
+    Uint32 refineryQueueSince = std::numeric_limits<Uint32>::max();
+    std::unordered_map<Uint32,Coord> mcvExpansionSites;
+    std::unordered_map<Uint32,Uint32> mcvSurveyCycles;
     Coord findPlaceLocation(Uint32 itemID);
     bool preservesGroundAccess(Uint32 item, Coord pos);
     void clearPlacementCache(bool geometryChanged = true);
@@ -242,6 +269,9 @@ private:
     void build(int militaryValue);
     void attack(int militaryValue);
     void manageCityBuilding();
+    std::map<Uint32,Uint32> roadRedirectRetryCycle;
+    Coord findFinishedRoadSite(const BuilderBase* yard);
+    std::vector<std::pair<int,int>> cityRoadRepairSites();
     int queueCityRoadRepairs(const BuilderBase* yard, int limit);
 
     Sint32 cityBuildTimer = 0;

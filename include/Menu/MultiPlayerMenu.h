@@ -45,6 +45,8 @@ private:
 
     void onCreateLANGame();
     void onCreateInternetGame();
+    void onPlayOnline();
+    void onHostCampaignCoop();
     void onConnect();
     void onJoin();
     void onQuit();
@@ -86,6 +88,8 @@ private:
     VBox            leftVBox;
     TextButton      createLANGameButton;
     TextButton      createInternetGameButton;
+    TextButton      playOnlineButton;
+    TextButton hostCampaignCoopButton;
 
     // right VBox with game list
     VBox            rightVBox;
@@ -101,4 +105,3 @@ private:
 };
 
 #endif // MULTIPLAYERMENU_H
-

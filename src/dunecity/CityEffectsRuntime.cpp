@@ -56,6 +56,7 @@ HouseCityState& CitySimulation::getHouseStateMut(int houseID) {
 int CitySimulation::getResPop() const { return getHouseState(localHouseID()).resPop; }
 int CitySimulation::getComPop() const { return getHouseState(localHouseID()).comPop; }
 int CitySimulation::getIndPop() const { return getHouseState(localHouseID()).indPop; }
+int CitySimulation::getTaxBaseEighths() const { return getHouseState(localHouseID()).taxBaseEighths; }
 int CitySimulation::getTotalPop() const { return getHouseState(localHouseID()).getTotalPop(); }
 int16_t CitySimulation::getResValve() const { return getHouseState(localHouseID()).resValve; }
 int16_t CitySimulation::getComValve() const { return getHouseState(localHouseID()).comValve; }
@@ -107,7 +108,7 @@ int cityLevelOf(const Tile* t, const StructureBase* pStruct) {
         return t ? t->getCityZoneDensity() : 0;
     }
     const int occ = pStruct->getCityOccupancy();
-    return occ > 0 ? occ : 1;
+    return DuneCity::effectiveCityLevel(pStruct->getItemID(), std::max(1, occ));
 }
 
 template<typename F>
@@ -725,15 +726,6 @@ void CitySimulation::reconcileLoadedMapState(uint32_t gameCycleCount) {
     for (int y = 0; y < map.getSizeY(); ++y) {
         for (int x = 0; x < map.getSizeX(); ++x) {
             Tile* t = map.getTile(x, y);
-            if (t && t->isRoad() && !validRoadOwner(t->getOwner())) {
-                t->setOwner(legacyRoadOwner(t->getOwner(), x, y, [&](int nx, int ny) {
-                    const Tile* neighbor = map.getTile(nx, ny);
-                    if (!neighbor || !neighbor->hasANonInfantryGroundObject()) return -1;
-                    const ObjectBase* object = neighbor->getNonInfantryGroundObject();
-                    return object && object->isAStructure() && object->getOwner()
-                        ? object->getOwner()->getHouseID() : -1;
-                }));
-            }
             if (!t || !t->hasANonInfantryGroundObject()) continue;
             ObjectBase* pObj = t->getNonInfantryGroundObject();
             if (!pObj || !pObj->isAStructure()) continue;
@@ -744,13 +736,15 @@ void CitySimulation::reconcileLoadedMapState(uint32_t gameCycleCount) {
             }
 
             if (getStructureCityRole(pStruct->getItemID()) == CityRole::None) {
+                pStruct->setCityOccupancy(0);
                 continue;
             }
             ++cityRoleStructures;
 
             auto* pZone = dynamic_cast<ZoneStructure*>(pStruct);
             if (!pZone) {
-                if (pStruct->getItemID() == Structure_WindTrap) pStruct->setCityOccupancy(1);
+                pStruct->setCityOccupancy(effectiveCityLevel(pStruct->getItemID(),
+                    std::max<int>(1, pStruct->getCityOccupancy())));
                 continue;
             }
 
@@ -847,7 +841,7 @@ void CitySimulation::runZoneGrowth() {
 
             ZoneStructure* pZone = dynamic_cast<ZoneStructure*>(pStruct);
             const int level = pZone ? t->getCityZoneDensity()
-                                    : std::max<int>(1, pStruct->getCityOccupancy());
+                                    : effectiveCityLevel(itemID, std::max<int>(1, pStruct->getCityOccupancy()));
             const int maxLevel = getStructureMaxLevel(itemID);
 
             nodes.push_back({
@@ -911,6 +905,7 @@ void CitySimulation::runZoneGrowth() {
         const int16_t prevComValve = vi.comValve;
         const int16_t prevIndValve = vi.indValve;
         const ValveOutputs vo = computeDemandValves(vi);
+        hs.civicDemandBlocked = vo.civicDemandBlocked;
         hs.resValve = vo.resValve;
         hs.comValve = vo.comValve;
         hs.indValve = vo.indValve;
@@ -1040,12 +1035,15 @@ void CitySimulation::runZoneGrowth() {
                 default: break;
             }
             if (destZone != ZoneType::None) {
-                const int trafResult = trafficSim.makeTraffic(pos.x, pos.y, destZone);
+                const int trafResult = trafficSim.makeTraffic(pos.x, pos.y, destZone, lastProcessedDay_);
                 if (trafResult < 0)     traffic = TrafficResult::NoRoad;
                 else if (trafResult == 0) traffic = TrafficResult::NoDestination;
                 else                      traffic = TrafficResult::Connected;
 
-                if (traffic == TrafficResult::Connected && CityTraffic::journeyDue(
+                // Micropolis generates journeys in R/C/I zone updates, not in
+                // special-building updates. Infrastructure remains a destination;
+                // its employment must not add a second source of commuter trips.
+                if (n.pZone && traffic == TrafficResult::Connected && CityTraffic::journeyDue(
                         n.role == CityRole::Residential,initialPopulation,pos.x,pos.y,lastProcessedDay_)) {
                     CityTraffic::addJourney(trafficDensityMap_,trafficSim.getLastPath(),
                         [&](int x,int y) {
@@ -1332,11 +1330,13 @@ void CitySimulation::runZoneGrowth() {
     for (int h = 0; h < kMaxCityHouses; ++h) {
         auto& hs = houseState_[h];
         int newRes = 0, newCom = 0, newInd = 0;
+        hs.taxBaseEighths = 0;
         for (const auto& n : nodes) {
             if (!n.pStruct->getOwner() || n.pStruct->getOwner()->getHouseID() != h)
                 continue;
             const int itemID = n.pStruct->getItemID();
             const int pop = getStructurePopulation(n.pStruct, n.level);
+            hs.taxBaseEighths += getStructureTaxBaseEighths(n.pStruct, n.level);
             switch (n.role) {
                 case CityRole::Residential: newRes += pop; break;
                 case CityRole::Commercial:  newCom += pop; break;
@@ -1435,11 +1435,13 @@ void CitySimulation::runDailyBudget() {
     if (!currentGameMap) return;
     const Map& map = *currentGameMap;
 
-    // One map walk collects population, police and owned road upkeep.
+    // One map walk collects the tax base and police costs. Roads have no upkeep.
     // All annual amounts are paid fractionally over kBudgetTicksPerYear.
-    for (auto& hs : houseState_) hs.roads = {};
+    for (auto& hs : houseState_) {
+        hs.taxBaseEighths = 0;
+    }
     struct HouseBudget {
-        int     pop       = 0;
+        int taxBaseEighths = 0;
         FixPoint policeCost = 0;
     };
     std::vector<std::pair<House*, HouseBudget>> houseBudgets;
@@ -1463,20 +1465,14 @@ void CitySimulation::runDailyBudget() {
 
         if (getStructureCityRole(itemID) != CityRole::None) {
             const int level = cityLevelOf(t, pStruct);
-            hb.pop += getStructurePopulation(pStruct, level);
+            hb.taxBaseEighths += getStructureTaxBaseEighths(pStruct, level);
         }
         hb.policeCost += getPoliceAnnualCost(itemID);
     };
-    const int trafficBlockSize = trafficDensityMap_.getBlockSize();
     for (int y = 0; y < map.getSizeY(); ++y) {
         for (int x = 0; x < map.getSizeX(); ++x) {
             const Tile* tile = map.getTile(x, y);
             if (!tile) continue;
-            const int ownerID = tile->getOwner();
-            if (tile->isRoad() && validRoadOwner(ownerID)) {
-                houseState_[ownerID].roads.add(true,
-                    trafficDensityMap_.get(x / trafficBlockSize, y / trafficBlockSize));
-            }
             if (!tile->hasANonInfantryGroundObject()) continue;
             const ObjectBase* object = tile->getNonInfantryGroundObject();
             if (!object || !object->isAStructure()) continue;
@@ -1486,19 +1482,13 @@ void CitySimulation::runDailyBudget() {
         }
     }
 
-    // Include road-only owners once, without a house lookup for every road tile.
-    for (int h = 0; h < kMaxCityHouses; ++h) {
-        if (houseState_[h].roads.tiles > 0) {
-            if (House* house = currentGame->getHouse(h)) findOrAdd(house);
-        }
-    }
-
     for (auto& [house, hb] : houseBudgets) {
         // Annual values divided by cycles-per-year for smooth payout.
         // Revenue scales with the house's own average land value.
         const int hID = house->getHouseID();
-        const auto& hs = houseState_[hID >= 0 && hID < kMaxCityHouses ? hID : 0];
-        const int32_t annualRevenue = computeAnnualTaxRevenue(hb.pop, cityTax_, hs.avgLandValue);
+        auto& hs = houseState_[hID >= 0 && hID < kMaxCityHouses ? hID : 0];
+        hs.taxBaseEighths = hb.taxBaseEighths;
+        const int32_t annualRevenue = computeAnnualTaxRevenue(hb.taxBaseEighths, cityTax_, hs.avgLandValue);
         const int fundingPct = hs.policeFundingPercent;
         const FixPoint annualPaid = (hb.policeCost * fundingPct) / 100;
 
@@ -1506,17 +1496,11 @@ void CitySimulation::runDailyBudget() {
         // smoothly (credits tick up like a harvester unloading spice).
         const FixPoint tickRevenue = FixPoint(annualRevenue) / kBudgetTicksPerYear;
         const FixPoint tickPaid    = FixPoint(annualPaid)    / kBudgetTicksPerYear;
-        const FixPoint tickRoadPaid = FixPoint(hs.roads.annualCost(hs.getTotalPop() * kPopDisplayMultiplier)) / kBudgetTicksPerYear;
-        const FixPoint net = tickRevenue - tickPaid - tickRoadPaid;
+        const FixPoint net = tickRevenue - tickPaid;
 
         house->addCityCredits(tickRevenue - tickPaid);
-        // Road upkeep must also draw on spice/starting funds when tax income
-        // is insufficient; addCityCredits alone clamps its own balance to zero.
-        const FixPoint roadCharged = tickRoadPaid > 0 ? house->takeCredits(tickRoadPaid) : FixPoint(0);
         AITelemetry::log().account(hID, "city_gross", tickRevenue.getRawValue());
         AITelemetry::log().account(hID, "police_charged", tickPaid.getRawValue());
-        AITelemetry::log().account(hID, "roads_due", tickRoadPaid.getRawValue());
-        AITelemetry::log().account(hID, "roads_charged", roadCharged.getRawValue());
 
         // Store per-house budget figures
         if (hID >= 0 && hID < kMaxCityHouses) {
@@ -1526,8 +1510,8 @@ void CitySimulation::runDailyBudget() {
 
         // Log once every 10 city years per house to keep logs manageable
         if (cityDay_ == 0 && (cityYear_ % 10 == 0)) {
-            SDL_Log("[CitySim] year=%d house=%d pop=%d rate=%d%% annual_revenue=%d annual_police=%.3f tick_net=%+d",
-                    cityYear_, house->getHouseID(), hb.pop, cityTax_,
+            SDL_Log("[CitySim] year=%d house=%d tax_base_eighths=%d rate=%d%% annual_revenue=%d annual_police=%.3f tick_net=%+d",
+                    cityYear_, house->getHouseID(), hb.taxBaseEighths, cityTax_,
                     annualRevenue, annualPaid.toDouble(), lround(net.toDouble()));
         }
     }

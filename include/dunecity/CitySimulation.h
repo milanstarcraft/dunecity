@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <vector>
 #ifndef DUNECITY_CITYSIMULATION_H
 #define DUNECITY_CITYSIMULATION_H
@@ -7,7 +8,6 @@
 #include <dunecity/CityConstants.h>
 #include <dunecity/CityMapLayer.h>
 #include <dunecity/CityBudget.h>
-#include <dunecity/RoadMaintenancePolicy.h>
 #include <dunecity/CrimeUnrestPolicy.h>
 #include <dunecity/CityDemandNoticePolicy.h>
 #include <dunecity/ParkTerrainPolicy.h>
@@ -23,6 +23,8 @@ static constexpr int kMaxCityHouses = NUM_HOUSES;
 
 struct HouseCityState {
     int resPop = 0, comPop = 0, indPop = 0;
+    uint8_t civicDemandBlocked = 0; // Derived from the latest demand calculation; not serialized.
+    int taxBaseEighths = 0; // Derived (R/8+C+I) in eighths, zones + Palace; not serialized.
     int prevResPop = 0, prevComPop = 0, prevIndPop = 0;
     int16_t resValve = 0, comValve = 0, indValve = 0;
     int avgLandValue = 0;
@@ -33,7 +35,6 @@ struct HouseCityState {
     int32_t nominalPoliceCost = 0;
     int32_t lastPoliceExpense = 0;
     CityBudget budget;
-    RoadMaintenanceCensus roads; // Derived from owned road tiles; not serialized.
 
     int getTotalPop() const { return resPop + comPop + indPop; }
 
@@ -81,6 +82,7 @@ public:
     int getComPop() const;
     int getIndPop() const;
     int getTotalPop() const;
+    int getTaxBaseEighths() const;
 
     // Display population (SC multiplied for UI — what players see)
     static constexpr int kPopDisplayMultiplier = 20;
@@ -111,6 +113,13 @@ public:
     /// These delegate to local player's house state.
     int getPoliceFundingPercent() const;
     void setPoliceFundingPercent(int v);
+    int getPoliceFundingPercent(int houseID) const {
+        return houseID >= 0 && houseID < kMaxCityHouses ? houseState_[houseID].policeFundingPercent : 100;
+    }
+    void setPoliceFundingPercent(int houseID, int value) {
+        if (houseID >= 0 && houseID < kMaxCityHouses)
+            houseState_[houseID].policeFundingPercent = std::clamp(value,0,100);
+    }
     /// Last computed police annual expense (full nominal, before funding%).
     int32_t getNominalPoliceCost() const;
     /// Last actual amount paid out (nominal * funding%/100).

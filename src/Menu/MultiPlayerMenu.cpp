@@ -1,7 +1,9 @@
 
 #include <Menu/MultiPlayerMenu.h>
+#include <Menu/CrossplayMenu.h>
 #include <Menu/CustomGameMenu.h>
 #include <Menu/CustomGamePlayers.h>
+#include <Menu/SinglePlayerSkirmishMenu.h>
 
 #include <FileClasses/GFXManager.h>
 #include <FileClasses/TextManager.h>
@@ -63,7 +65,7 @@ MultiPlayerMenu::MultiPlayerMenu() : MenuBase() {
     mainVBox.addWidget(Spacer::create(), 0.05);
     mainVBox.addWidget(&mainHBox, 0.85);
 
-    mainHBox.addWidget(&leftVBox, 180);
+    mainHBox.addWidget(&leftVBox, 230);
 
     createLANGameButton.setText(_("Create LAN Game"));
     createLANGameButton.setOnClick(std::bind(&MultiPlayerMenu::onCreateLANGame, this));
@@ -71,11 +73,24 @@ MultiPlayerMenu::MultiPlayerMenu() : MenuBase() {
 
     leftVBox.addWidget(VSpacer::create(8));
 
-    createInternetGameButton.setText(_("Create Internet Game"));
+    createInternetGameButton.setText(_("Host Internet Custom Game"));
     createInternetGameButton.setOnClick(std::bind(&MultiPlayerMenu::onCreateInternetGame, this));
     leftVBox.addWidget(&createInternetGameButton, 0.1);
 
-    leftVBox.addWidget(Spacer::create(), 0.8);
+    leftVBox.addWidget(VSpacer::create(8));
+
+    // Crossplay: one outbound connection to the game service, no port forwarding, and desktop
+    // and browser players can share a game. The legacy LAN and direct-Internet buttons above
+    // keep working exactly as they did.
+    playOnlineButton.setText(_("Play Online (Crossplay)"));
+    playOnlineButton.setOnClick(std::bind(&MultiPlayerMenu::onPlayOnline, this));
+    leftVBox.addWidget(&playOnlineButton, 0.1);
+
+    leftVBox.addWidget(VSpacer::create(8));
+    hostCampaignCoopButton.setText(_("Host Campaign Co-op"));
+    hostCampaignCoopButton.setOnClick(std::bind(&MultiPlayerMenu::onHostCampaignCoop, this));
+    leftVBox.addWidget(&hostCampaignCoopButton, 0.1);
+    leftVBox.addWidget(Spacer::create(), 0.6);
 
     rightVBox.addWidget(&gameTypeButtonsHBox, 24);
 
@@ -218,6 +233,29 @@ void MultiPlayerMenu::onCreateInternetGame() {
 }
 
 
+void MultiPlayerMenu::onPlayOnline() {
+    if(!validateAndSavePlayerName()) {
+        return;
+    }
+
+    // The crossplay menu owns its own session, so the mesh one must be out of the way first:
+    // two NetworkManagers would fight over the global the whole game reads.
+    std::unique_ptr<NetworkManager> meshSession = std::move(pNetworkManager);
+    pNetworkManager.reset();
+
+    const int result = CrossplayMenu().showMenu();
+
+    pNetworkManager = std::move(meshSession);
+
+    if(result == MENU_QUIT_GAME_FINISHED) {
+        quit(MENU_QUIT_GAME_FINISHED);
+    }
+}
+
+void MultiPlayerMenu::onHostCampaignCoop() {
+    if(validateAndSavePlayerName()) SinglePlayerSkirmishMenu(true).showMenu();
+}
+
 void MultiPlayerMenu::onConnect() {
     if (!validateAndSavePlayerName()) {
         return;
@@ -234,6 +272,13 @@ void MultiPlayerMenu::onConnect() {
     pNetworkManager->connect(hostname, port, settings.general.playerName);
 
     openWindow(MsgBox::create(_("Connecting...")));
+}
+
+
+void MultiPlayerMenu::onQuit() {
+    SDL_Event quitEvent;
+    quitEvent.type = SDL_QUIT;
+    SDL_PushEvent(&quitEvent);
 }
 
 
@@ -384,13 +429,6 @@ void MultiPlayerMenu::onJoin() {
 
         openWindow(MsgBox::create(_("Connecting...")));
     }
-}
-
-
-void MultiPlayerMenu::onQuit() {
-    SDL_Event quitEvent;
-    quitEvent.type = SDL_QUIT;
-    SDL_PushEvent(&quitEvent);
 }
 
 

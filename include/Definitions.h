@@ -29,6 +29,31 @@
 #define DEFAULT_PORT        28747
 #define DEFAULT_METASERVER  "https://dunelegacy.com/metaserver/metaserver.php"
 
+/**
+    Base URL of the room relay that carries crossplay games (see docs/room-relay-protocol.md).
+
+    Empty by default on purpose: nothing in this repository deploys a relay, and the game must
+    not invent an endpoint. An operator sets "Relay Endpoint" in the Network section of the
+    configuration file, or passes --RelayEndpoint= on the command line.
+*/
+#define DEFAULT_RELAY_ENDPOINT  "https://dunelegacy.com/relay"
+
+/// The loopback relay used for development and testing. Only ever plain http/ws, only loopback.
+#define DEVELOPMENT_RELAY_ENDPOINT "http://127.0.0.1:8787"
+
+/**
+    Base URL of the direct-play signaling service (see docs/direct-play.md).
+
+    This service introduces players to each other and does nothing else: it never carries a
+    gameplay byte, and a match keeps running if it goes away. It is deliberately a different path
+    from the relay endpoint above, so that an admission answer cannot move a direct match back
+    onto somebody's server - the client refuses a "/relay" address on this setting outright.
+*/
+#define DEFAULT_DIRECT_ENDPOINT "https://dunelegacy.com/p2p"
+
+/// The loopback signaling service used for development. Plain http, loopback only, opt-in only.
+#define DEVELOPMENT_DIRECT_ENDPOINT "http://127.0.0.1:8788"
+
 #define SAVEMAGIC           8675309
 // 9822: Worfinery persists its progressive harvester extraction state.
 // 9820: CitySimulation persists every house's R/C/I and budget state.
@@ -43,7 +68,10 @@
 // 9833: City district gang buildup persists dangerous-building exposure.
 // 9834: Former crime exposure slot stores mature-outbreak gathering time.
 // 9835: Residential zones persist individual houses and apartment population.
-#define SAVEGAMEVERSION     9835
+// 9836: Airports persist reinforcement cooldown and partially deployed pairs.
+// 9837: Network campaign/mission game types and shared-house co-op saves.
+// 9838: QuantBot campaign assault membership, opening and recovery timers.
+#define SAVEGAMEVERSION     9838
 
 // v1.0.0–v1.0.7 shipped SAVEGAMEVERSION 9810 with Num_ItemID=48.
 // v1.0.8–v1.0.10 also used 9810 but with Num_ItemID=52 (4 items added
@@ -114,7 +142,7 @@
 #define DEFAULT_STARTINGCREDITS 3000
 
 #define HUMANPLAYERCLASS        "HumanPlayer"
-#define DEFAULTAIPLAYERCLASS    "CampaignAIPlayer"
+#define DEFAULTAIPLAYERCLASS    "qBotEasy"
 
 
 #ifndef RESTRICT

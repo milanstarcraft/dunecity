@@ -28,6 +28,7 @@
 #include <GUI/Spacer.h>
 #include <GUI/GUIStyle.h>
 #include <GUI/MsgBox.h>
+#include <GUI/dune/GameOptionsWindow.h>
 #include <GUI/dune/DuneStyle.h>
 
 #include <players/PlayerFactory.h>
@@ -36,6 +37,7 @@
 
 #include <misc/fnkdat.h>
 #include <misc/FileSystem.h>
+#include <misc/WebRuntime.h>
 #include <misc/draw_util.h>
 #include <misc/string_util.h>
 #include <misc/IMemoryStream.h>
@@ -47,6 +49,8 @@
 
 #include <sand.h>
 #include <globals.h>
+
+#include <algorithm>
 
 
 #define PLAYER_HUMAN        0
@@ -152,8 +156,10 @@ int resolveSelectedColorSlot(int selectedColor, int selectedHouse) {
 }
 
 
-CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings, bool server, bool LANServer)
+CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings, bool server, bool LANServer, CustomPlaySetup* newSetup, const ChangeEventList* initialPlayers)
  : MenuBase(), gameInitSettings(newGameInitSettings), bServer(server), bLANServer(LANServer), startGameTime(0), bConfigMismatchDetected(false), bModDownloadInProgress(false), bWaitingForModAcks(false), brainEqHumanSlot(-1) {
+    setup = newSetup;
+    const bool compactPlayers = getRendererWidth() < 800;
 
     // set up window
     SDL_Texture *pBackground = pGFXManager->getUIGraphic(UI_MenuBackground);
@@ -166,13 +172,60 @@ CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings
 
     captionLabel.setText(getBasename(gameInitSettings.getFilename(), true));
     captionLabel.setAlignment(Alignment_HCenter);
-    mainVBox.addWidget(&captionLabel, 24);
-    mainVBox.addWidget(VSpacer::create(24));
+    captionHBox.addWidget(&captionLabel, 1.0);
+    copyCodeButton.setText(_("Copy code"));
+    copyCodeButton.setVisible(false);
+    copyCodeButton.setEnabled(false);
+    captionHBox.addWidget(&copyCodeButton, 130);
+    mainVBox.addWidget(&captionHBox, 24);
+    mainVBox.addWidget(VSpacer::create(8));
+    if(setup) {
+        captionLabel.setText(_("Custom Game"));
+        setupMapRow.addWidget(Label::create(_("Map")), 40);
+        for(size_t i = 0; i < setup->maps.size(); ++i)
+            setupMap.addEntry(getBasename(setup->maps[i], true), static_cast<int>(i));
+        setupMap.setSelectedItem(setup->map);
+        setupMap.setOnSelectionChange([this](bool interactive) { if(interactive) { setup->map = setupMap.getSelectedIndex(); rebuildSetup(false); } });
+        setupMapRow.addWidget(&setupMap, 1.0);
+        setupBrowseMaps.setText(_("Browse Maps"));
+        setupBrowseMaps.setOnClick([this]() { onCancel(); });
+        setupMapRow.addWidget(&setupBrowseMaps, 110);
+        setupMapRow.addWidget(Label::create(_("Mod")), 40);
+        for(size_t i = 0; i < setup->mods.size(); ++i) setupMod.addEntry(setup->mods[i].displayName, static_cast<int>(i));
+        setupMod.setSelectedItem(setup->mod);
+        setupMod.setOnSelectionChange([this](bool interactive) { if(interactive) { setup->mod = setupMod.getSelectedIndex(); rebuildSetup(false); } });
+        setupMapRow.addWidget(&setupMod, 155);
+        mainVBox.addWidget(&setupMapRow, 28);
+        setupConnection.addEntry(_("Offline"), 0);
+        setupConnection.addEntry(_("Online"), 1);
+        setupConnection.setSelectedItem(setup->online ? 1 : 0);
+        setupConnection.setOnSelectionChange([this](bool interactive) { if(interactive) { setup->online = setupConnection.getSelectedIndex() == 1; rebuildSetup(true); } });
+        setupModeRow.addWidget(&setupConnection, 120);
+        setupVisibility.addEntry(_("Private - invite code"), 0);
+        setupVisibility.addEntry(_("Public - anyone"), 1);
+        setupVisibility.setSelectedItem(setup->publicGame ? 1 : 0);
+        setupVisibility.setEnabled(setup->online);
+        setupVisibility.setOnSelectionChange([this](bool) { setup->publicGame = setupVisibility.getSelectedIndex() == 1; });
+        if(setup->online) setupModeRow.addWidget(&setupVisibility, 180);
+        setupShared.setText(_("Shared house"));
+        setupShared.setChecked(setup->sharedHouse);
+        setupShared.setOnClick([this]() { setup->sharedHouse = setupShared.isChecked(); rebuildSetup(true); });
+        setupModeRow.addWidget(&setupShared, 1.0);
+        setupRules.setText(_("Game Rules"));
+        setupRules.setOnClick([this]() { openWindow(GameOptionsWindow::create(setup->rules)); });
+        setupModeRow.addWidget(&setupRules, 110);
+        mainVBox.addWidget(VSpacer::create(6));
+        mainVBox.addWidget(&setupModeRow, 28);
+    }
+    readinessLabel.setTextFontSize(12);
+    mainVBox.addWidget(&readinessLabel, 22);
 
     mainVBox.addWidget(Spacer::create(), 0.04);
 
     mainVBox.addWidget(&mainHBox, 0.6);
 
+    // Keep the classic centered player roster beside the map preview. The
+    // outer spacers absorb wide-screen space instead of stretching the rows.
     mainHBox.addWidget(Spacer::create(), 0.05);
     leftVBox.addWidget(Spacer::create(), 0.1);
     leftVBox.addWidget(&playerListHBox);
@@ -180,17 +233,31 @@ CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings
     playerListHBox.addWidget(&playerListVBox, 0.2);
     playerListHBox.addWidget(Spacer::create(), 0.4);
     mainHBox.addWidget(&leftVBox, 0.8);
-
     mainHBox.addWidget(Spacer::create(), 0.05);
-
     mainHBox.addWidget(HSpacer::create(8));
-
     mainHBox.addWidget(&rightVBox, 180);
     mainHBox.addWidget(Spacer::create(), 0.05);
     minimap.setSurface( GUIStyle::getInstance().createButtonSurface(130,130,_("Choose map"), true, false) );
     rightVBox.addWidget(&minimap);
 
-    if(gameInitSettings.getGameType() == GameType::CustomGame || gameInitSettings.getGameType() == GameType::CustomMultiplayer) {
+    if(isCoopGameType(gameInitSettings.getGameType())) {
+        fixedCoopHouses = gameInitSettings.getHouseInfoList();
+        if(gameInitSettings.getGameType() != GameType::LoadCoop) {
+            auto rw = sdl2::RWops_ptr{SDL_RWFromConstMem(gameInitSettings.getFiledata().data(), gameInitSettings.getFiledata().size())};
+            INIFile map(rw.get());
+            extractMapInfo(&map);
+        } else {
+            minimap.setSurface(GUIStyle::getInstance().createButtonSurface(130, 130, _("Campaign save"), true, false));
+        }
+        numHouses = 1;
+        slotToTeam[0] = 0;
+        boundHousesOnMap.clear();
+        boundHousesOnMap.push_back(gameInitSettings.getHouseID());
+        brainEqHumanSlot = 0;
+        mapPropertyPlayers.setText("2 co-op");
+        captionLabel.setText(gameInitSettings.getServername().empty()
+            ? _("Campaign co-op") : gameInitSettings.getServername());
+    } else if(gameInitSettings.getGameType() == GameType::CustomGame || gameInitSettings.getGameType() == GameType::CustomMultiplayer) {
         auto RWops = sdl2::RWops_ptr{ SDL_RWFromConstMem(gameInitSettings.getFiledata().c_str(), gameInitSettings.getFiledata().size()) };
 
         INIFile inimap(RWops.get());
@@ -198,25 +265,7 @@ CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings
     } else if(gameInitSettings.getGameType() == GameType::LoadMultiplayer) {
         IMemoryStream memStream(gameInitSettings.getFiledata().c_str(), gameInitSettings.getFiledata().size());
 
-        Uint32 magicNum = memStream.readUint32();
-        if(magicNum != SAVEMAGIC) {
-            SDL_Log("CustomGamePlayers: No valid savegame! Expected magic number %.8X, but got %.8X!", SAVEMAGIC, magicNum);
-        }
-
-        Uint32 savegameVersion = memStream.readUint32();
-        if (savegameVersion != SAVEGAMEVERSION) {
-            SDL_Log("CustomGamePlayers: No valid savegame! Expected savegame version %d, but got %d!", SAVEGAMEVERSION, savegameVersion);
-        }
-
-        memStream.readString();     // dune legacy version
-
-        // read gameInitSettings
-        GameInitSettings tmpGameInitSettings(memStream);
-
-        Uint32 numHouseInfo = memStream.readUint32();
-        for(Uint32 i=0;i<numHouseInfo;i++) {
-            houseInfoListSetup.push_back(GameInitSettings::HouseInfo(memStream));
-        }
+        GameInitSettings tmpGameInitSettings = GameInitSettings::readSaveSetup(memStream, houseInfoListSetup);
 
         auto RWops = sdl2::RWops_ptr{ SDL_RWFromConstMem(tmpGameInitSettings.getFiledata().c_str(), tmpGameInitSettings.getFiledata().size()) };
 
@@ -255,16 +304,16 @@ CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings
 
     mainVBox.addWidget(&buttonHBox, 0.32);
 
-    buttonHBox.addWidget(HSpacer::create(70));
+    buttonHBox.addWidget(HSpacer::create(getRendererWidth() >= 1000 ? 70 : 8));
 
     backButtonVBox.addWidget(Spacer::create());
     backButton.setText(_("Back"));
     backButton.setOnClick(std::bind(&CustomGamePlayers::onCancel, this));
     backButtonVBox.addWidget(&backButton, 24);
     backButtonVBox.addWidget(VSpacer::create(14));
-    buttonHBox.addWidget(&backButtonVBox, 0.1);
+    buttonHBox.addWidget(&backButtonVBox, 110);
 
-    buttonHBox.addWidget(Spacer::create(), 0.0625);
+    buttonHBox.addWidget(HSpacer::create(10));
 
     chatTextView.setTextFontSize(12);
     chatVBox.addWidget(&chatTextView, 0.77);
@@ -274,9 +323,9 @@ CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings
     chatTextBox.setOnReturn(std::bind(&CustomGamePlayers::onSendChatMessage, this));
     chatVBox.addWidget(&chatTextBox, 0.2);
     chatVBox.addWidget(Spacer::create(), 0.03);
-    buttonHBox.addWidget(&chatVBox, 0.675);
+    buttonHBox.addWidget(&chatVBox, 1.0);
 
-    if(gameInitSettings.getGameType() != GameType::CustomMultiplayer && gameInitSettings.getGameType() != GameType::LoadMultiplayer) {
+    if(!isNetworkGameType(gameInitSettings.getGameType())) {
         chatVBox.setVisible(false);
         chatVBox.setEnabled(false);
     }
@@ -285,10 +334,10 @@ CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings
     const bool bBonusHouseColorsAvailable = bLoadMultiplayer
         || ModManager::instance().isTornieContentActive();
 
-    buttonHBox.addWidget(Spacer::create(), 0.0625);
+    buttonHBox.addWidget(HSpacer::create(10));
 
     nextButtonVBox.addWidget(Spacer::create());
-    nextButton.setText(_("Next"));
+    nextButton.setText(setup && setup->online ? _("Create Lobby") : isCoopGameType(gameInitSettings.getGameType()) ? _("Start Campaign") : _("Start Game"));
     nextButton.setOnClick(std::bind(&CustomGamePlayers::onNext, this));
     nextButtonVBox.addWidget(&nextButton, 24);
     nextButtonVBox.addWidget(VSpacer::create(14));
@@ -296,9 +345,9 @@ CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings
         nextButton.setEnabled(false);
         nextButton.setVisible(false);
     }
-    buttonHBox.addWidget(&nextButtonVBox, 0.1);
+    buttonHBox.addWidget(&nextButtonVBox, 130);
 
-    buttonHBox.addWidget(HSpacer::create(90));
+    buttonHBox.addWidget(HSpacer::create(getRendererWidth() >= 1000 ? 90 : 8));
 
     std::list<HOUSETYPE>  tmpBoundHousesOnMap = boundHousesOnMap;
 
@@ -309,7 +358,7 @@ CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings
 
         // set up header row with Label "House", DropDown for house selection and DropDown for team selection
         curHouseInfo.houseLabel.setText(_("House"));
-        curHouseInfo.houseHBox.addWidget(&curHouseInfo.houseLabel, 60);
+        curHouseInfo.houseHBox.addWidget(&curHouseInfo.houseLabel, compactPlayers ? 42 : 60);
 
         if(bLoadMultiplayer) {
             if(i < (int) houseInfoListSetup.size()) {
@@ -334,7 +383,7 @@ CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings
             curHouseInfo.houseDropDown.setEnabled(bServer);
         }
         curHouseInfo.houseDropDown.setOnSelectionChange(std::bind(&CustomGamePlayers::onChangeHousesDropDownBoxes, this, std::placeholders::_1, i));
-        curHouseInfo.houseHBox.addWidget(&curHouseInfo.houseDropDown, 95);
+        curHouseInfo.houseHBox.addWidget(&curHouseInfo.houseDropDown, compactPlayers && bBonusHouseColorsAvailable ? 85 : 95);
 
         if(bLoadMultiplayer) {
             if(i < (int) houseInfoListSetup.size()) {
@@ -354,7 +403,7 @@ CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings
         }
         curHouseInfo.teamDropDown.setOnSelectionChange(std::bind(&CustomGamePlayers::onChangeTeamDropDownBoxes, this, std::placeholders::_1, i));
         curHouseInfo.houseHBox.addWidget(HSpacer::create(10));
-        curHouseInfo.houseHBox.addWidget(&curHouseInfo.teamDropDown, 85);
+        curHouseInfo.houseHBox.addWidget(&curHouseInfo.teamDropDown, compactPlayers && bBonusHouseColorsAvailable ? 70 : 85);
 
         int selectedColor = HOUSE_INVALID;
         if(bLoadMultiplayer) {
@@ -378,18 +427,20 @@ CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings
         curHouseInfo.bonusColorCheckbox.setOnClick(std::bind(&CustomGamePlayers::onBonusColorCheckbox, this, i));
         curHouseInfo.colorDropDown.setOnSelectionChange(std::bind(&CustomGamePlayers::onChangeColorDropDownBoxes, this, std::placeholders::_1, i));
         curHouseInfo.houseHBox.addWidget(HSpacer::create(10));
-        curHouseInfo.houseHBox.addWidget(&curHouseInfo.bonusColorCheckbox, 75);
-        curHouseInfo.houseHBox.addWidget(HSpacer::create(6));
-        curHouseInfo.houseHBox.addWidget(&curHouseInfo.colorDropDown, 95);
+        if(bBonusHouseColorsAvailable) {
+            curHouseInfo.houseHBox.addWidget(&curHouseInfo.bonusColorCheckbox, 75);
+            curHouseInfo.houseHBox.addWidget(HSpacer::create(6));
+        }
+        curHouseInfo.houseHBox.addWidget(&curHouseInfo.colorDropDown, compactPlayers && bBonusHouseColorsAvailable ? 85 : 95);
 
         curHouseInfo.houseInfoVBox.addWidget(&curHouseInfo.houseHBox);
 
         // add 1. player
         curHouseInfo.player1ArrowLabel.setTexture(pGFXManager->getUIGraphic(UI_CustomGamePlayersArrowNeutral));
         curHouseInfo.playerHBox.addWidget(&curHouseInfo.player1ArrowLabel);
-        curHouseInfo.player1Label.setText(_("Player") + (gameInitSettings.isMultiplePlayersPerHouse() ? " 1" : ""));
+        curHouseInfo.player1Label.setText(gameInitSettings.isMultiplePlayersPerHouse() ? (compactPlayers ? _("P1") : _("Player 1")) : _("Player"));
         curHouseInfo.player1Label.setTextFontSize(12);
-        curHouseInfo.playerHBox.addWidget(&curHouseInfo.player1Label, 68);
+        curHouseInfo.playerHBox.addWidget(&curHouseInfo.player1Label, gameInitSettings.isMultiplePlayersPerHouse() && compactPlayers ? 24 : 68);
 
         if(bLoadMultiplayer) {
             if(i < (int) houseInfoListSetup.size()) {
@@ -451,14 +502,14 @@ CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings
         }
         curHouseInfo.player1DropDown.setOnSelectionChange(std::bind(&CustomGamePlayers::onChangePlayerDropDownBoxes, this, std::placeholders::_1, 2*i));
         curHouseInfo.player1DropDown.setOnClick(std::bind(&CustomGamePlayers::onClickPlayerDropDownBox, this, 2*i));
-        curHouseInfo.playerHBox.addWidget(&curHouseInfo.player1DropDown, 100);
+        curHouseInfo.playerHBox.addWidget(&curHouseInfo.player1DropDown, gameInitSettings.isMultiplePlayersPerHouse() && compactPlayers ? 145 : 180);
 
-        curHouseInfo.playerHBox.addWidget(HSpacer::create(10));
+        if(gameInitSettings.isMultiplePlayersPerHouse()) curHouseInfo.playerHBox.addWidget(HSpacer::create(8));
 
         // add 2. player
-        curHouseInfo.player2Label.setText(_("Player") + " 2");
+        curHouseInfo.player2Label.setText(compactPlayers ? _("P2") : _("Player 2"));
         curHouseInfo.player2Label.setTextFontSize(12);
-        curHouseInfo.playerHBox.addWidget(&curHouseInfo.player2Label, 68);
+        if(gameInitSettings.isMultiplePlayersPerHouse()) curHouseInfo.playerHBox.addWidget(&curHouseInfo.player2Label, compactPlayers ? 24 : 68);
 
         if(bLoadMultiplayer) {
             if(i < (int) houseInfoListSetup.size()) {
@@ -518,7 +569,7 @@ CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings
         }
         curHouseInfo.player2DropDown.setOnSelectionChange(std::bind(&CustomGamePlayers::onChangePlayerDropDownBoxes, this, std::placeholders::_1, 2*i + 1));
         curHouseInfo.player2DropDown.setOnClick(std::bind(&CustomGamePlayers::onClickPlayerDropDownBox, this, 2*i + 1));
-        curHouseInfo.playerHBox.addWidget(&curHouseInfo.player2DropDown, 100);
+        if(gameInitSettings.isMultiplePlayersPerHouse()) curHouseInfo.playerHBox.addWidget(&curHouseInfo.player2DropDown, compactPlayers ? 145 : 180);
 
         curHouseInfo.houseInfoVBox.addWidget(&curHouseInfo.playerHBox);
 
@@ -533,6 +584,17 @@ CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings
         }
     }
 
+    if(isCoopGameType(gameInitSettings.getGameType())) {
+        auto& shared = houseInfo[0];
+        shared.teamDropDown.setSelectedItem(0);
+        shared.player2DropDown.clearAllEntries();
+        shared.player2DropDown.addEntry(_("Open: human co-op"), PLAYER_OPEN);
+        for(const char* cls : {"qBotEasy", "qBotMedium", "qBotHard", "qBotBrutal", "qBotDefend", "qBotSupportEasy", "qBotSupportMedium", "qBotSupportHard", "qBotSupportBrutal"}) {
+            const int index = PlayerFactory::getIndexByPlayerClass(cls);
+            if(index >= 0) shared.player2DropDown.addEntry(PlayerFactory::getByIndex(index)->getName(), index);
+        }
+        shared.player2DropDown.setSelectedItem(0);
+    }
     onChangeHousesDropDownBoxes(false);
 
     checkPlayerBoxes();
@@ -553,13 +615,26 @@ CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings
         }
     }
 
-    if(pNetworkManager != nullptr) {
-        if(bServer) {
-            pNetworkManager->startServer(bLANServer, gameInitSettings.getServername(), settings.general.playerName, &gameInitSettings, 1, gameInitSettings.isMultiplePlayersPerHouse() ? numHouses*2 : numHouses);
+    if(setup && setup->players.changeEventList.empty() && !setup->online) {
+        const int ai = PlayerFactory::getIndexByPlayerClass("qBotEasy");
+        for(int slot = 0; slot < numHouses; ++slot) {
+            auto& box = houseInfo[slot].player1DropDown;
+            if(box.getSelectedEntryIntData() == PLAYER_OPEN)
+                for(int i = 0; i < box.getNumEntries(); ++i) if(box.getEntryIntData(i) == ai) { box.setSelectedItem(i); break; }
         }
+        checkPlayerBoxes();
+    }
+    restoringSetup = true;
+    if(setup && !setup->players.changeEventList.empty()) onReceiveChangeEventList(setup->players);
+    if(initialPlayers) onReceiveChangeEventList(*initialPlayers);
+    restoringSetup = false;
 
+    if(pNetworkManager != nullptr) {
         pNetworkManager->setOnPeerDisconnected(std::bind(&CustomGamePlayers::onPeerDisconnected, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
-        pNetworkManager->setOnReceiveChangeEventList(std::bind(&CustomGamePlayers::onReceiveChangeEventList, this, std::placeholders::_1));
+        pNetworkManager->setOnReceiveChangeEventList(
+            [this](const std::string& senderName, const ChangeEventList& changeEventList) {
+                onReceiveChangeEventList(senderName, changeEventList);
+            });
         pNetworkManager->setOnReceiveChatMessage(std::bind(&CustomGamePlayers::onReceiveChatMessage, this, std::placeholders::_1, std::placeholders::_2));
         pNetworkManager->setOnConfigMismatch(std::bind(&CustomGamePlayers::onConfigMismatch, this, std::placeholders::_1));
         pNetworkManager->setOnReceiveModInfo(std::bind(&CustomGamePlayers::onReceiveModInfo, this, std::placeholders::_1, std::placeholders::_2));
@@ -568,12 +643,40 @@ CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings
 
         if(bServer) {
             pNetworkManager->setGetChangeEventListForNewPlayerCallback(std::bind(&CustomGamePlayers::getChangeEventListForNewPlayer, this, std::placeholders::_1));
-        } else {
+            // Relay guests can join before the host chooses a map. startServer immediately
+            // sends their lobby snapshot, so seat assignment must already be available.
+            pNetworkManager->startServer(bLANServer, gameInitSettings.getServername(), settings.general.playerName, &gameInitSettings, 1, gameInitSettings.isMultiplePlayersPerHouse() ? numHouses*2 : numHouses);
+        }
+        // Direct hosts also wait for the acknowledged roster before their countdown.
+        if(!bServer || pNetworkManager->isDirectSession()) {
             pNetworkManager->setOnStartGame(std::bind(&CustomGamePlayers::onStartGame, this, std::placeholders::_1));
         }
         
         // Update Discord Rich Presence for multiplayer lobby
         updateDiscordLobbyPresence();
+
+        // Only private hosts need an invitation code; public games are joined from the list.
+        const std::string roomCode = pNetworkManager->getRoomCode();
+        if(bServer && !pNetworkManager->isPublicRelayRoom() && !roomCode.empty()) {
+            copyCodeButton.setVisible(true);
+            copyCodeButton.setEnabled(true);
+            copyCodeButton.setOnClick([this, roomCode]() {
+                copyCodeButton.setText(WebRuntime::copyText(roomCode) ? _("Copied!") : _("Try again"));
+            });
+            captionLabel.setText(captionLabel.getText() + "   [" + roomCode + "]");
+            addInfoMessage(_("Game code: ") + roomCode);
+            if(bServer) {
+                addInfoMessage(_("Give that code to a friend so they can join."));
+            }
+        }
+
+        if(pNetworkManager->isRelaySession() && !bServer) {
+            // Send our content fingerprint now, while the room is certainly still a lobby. On
+            // the relay the host may declare the match started in the same breath as it sends
+            // its own hashes, so answering that message later would be too late.
+            pNetworkManager->sendConfigHash(getQuantBotConfig().getConfigHash(),
+                                            getObjectDataHash(), VERSIONSTRING);
+        }
     }
 }
 
@@ -600,7 +703,7 @@ CustomGamePlayers::~CustomGamePlayers()
 
         pNetworkManager->setOnPeerDisconnected(std::function<void (const std::string&, bool, int)>());
         pNetworkManager->setGetChangeEventListForNewPlayerCallback(std::function<ChangeEventList (const std::string&)>());
-        pNetworkManager->setOnReceiveChangeEventList(std::function<void (const ChangeEventList&)>());
+        pNetworkManager->setOnReceiveChangeEventList(std::function<void (const std::string&, const ChangeEventList&)>());
         pNetworkManager->setOnReceiveChatMessage(std::function<void (const std::string&, const std::string&)>());
         pNetworkManager->setOnStartGame(std::function<void (unsigned int)>());
         pNetworkManager->setOnReceiveModInfo(std::function<void (const std::string&, const std::string&)>());
@@ -617,7 +720,38 @@ CustomGamePlayers::~CustomGamePlayers()
     }
 }
 
+int CustomGamePlayers::showMenu() {
+    const int result = MenuBase::showMenu();
+    if(setup && result == MENU_QUIT_DEFAULT) {
+        setup->players = getChangeEventList();
+        return MENU_SETUP_MAP;
+    }
+    return result;
+}
+
+void CustomGamePlayers::rebuildSetup(bool keepPlayers) {
+    setup->players = keepPlayers ? getChangeEventList() : ChangeEventList{};
+    quit(MENU_SETUP_CHANGED);
+}
+
+void CustomGamePlayers::onChildWindowClose(Window* child) {
+    if(auto* rules = dynamic_cast<GameOptionsWindow*>(child); rules && setup) {
+        setup->rules = rules->getGameOptions();
+        rebuildSetup(true);
+    }
+}
+
 void CustomGamePlayers::update() {
+    if(isCoopGameType(gameInitSettings.getGameType()) && startGameTime == 0 && bServer && !bWaitingForModAcks) {
+        const int partner = houseInfo[0].player2DropDown.getSelectedEntryIntData();
+        const bool waiting = partner == PLAYER_OPEN || partner == PLAYER_CLOSED;
+        nextButton.setEnabled(!waiting);
+        readinessLabel.setText(waiting ? _("Waiting for your co-op partner, or choose an AI partner.") : _("Your co-op partner is ready."));
+    } else if(!bServer && startGameTime == 0) readinessLabel.setText(_("Waiting for the host to start."));
+    else if(setup) readinessLabel.setText(setup->online
+        ? _("Leave an open player slot for a friend. Create Lobby when ready.")
+        : _("Choose your map and opponents, then Start Game."));
+
     if(startGameTime > 0) {
         // Check if config mismatch was detected - abort game start
         if(bConfigMismatchDetected) {
@@ -631,7 +765,7 @@ void CustomGamePlayers::update() {
 
             pNetworkManager->setOnPeerDisconnected(std::function<void (const std::string&, bool, int)>());
             pNetworkManager->setGetChangeEventListForNewPlayerCallback(std::function<ChangeEventList (const std::string&)>());
-            pNetworkManager->setOnReceiveChangeEventList(std::function<void (const ChangeEventList&)>());
+            pNetworkManager->setOnReceiveChangeEventList(std::function<void (const std::string&, const ChangeEventList&)>());
             pNetworkManager->setOnReceiveChatMessage(std::function<void (const std::string&, const std::string&)>());
             pNetworkManager->setOnStartGame(std::function<void (unsigned int)>());
 
@@ -656,9 +790,72 @@ void CustomGamePlayers::update() {
     }
 }
 
-void CustomGamePlayers::onReceiveChangeEventList(const ChangeEventList& changeEventList)
+LobbyAuthorization::SeatSnapshot CustomGamePlayers::makeSeatSnapshot() const {
+    LobbyAuthorization::SeatSnapshot snapshot;
+    snapshot.numHouses = numHouses;
+    snapshot.multiplePlayersPerHouse = gameInitSettings.isMultiplePlayersPerHouse();
+
+    const int slotCount = std::min(numHouses * 2,
+                                   static_cast<int>(snapshot.slots.size()));
+    for(int slot = 0; slot < slotCount; slot++) {
+        const HouseInfo& curHouseInfo = houseInfo[slot / 2];
+        const DropDownBox& dropDownBox = (slot % 2 == 0) ? curHouseInfo.player1DropDown
+                                                         : curHouseInfo.player2DropDown;
+
+        LobbyAuthorization::SlotState& state = snapshot.slots[static_cast<std::size_t>(slot)];
+        const int entryData = dropDownBox.getSelectedEntryIntData();
+        if(entryData == PLAYER_HUMAN) {
+            state.kind = LobbyAuthorization::SlotKind::Human;
+            state.name = dropDownBox.getSelectedEntry();
+        } else if(entryData == PLAYER_OPEN) {
+            state.kind = LobbyAuthorization::SlotKind::Open;
+        } else if(entryData == PLAYER_CLOSED) {
+            state.kind = LobbyAuthorization::SlotKind::Closed;
+        } else {
+            state.kind = LobbyAuthorization::SlotKind::AI;
+        }
+    }
+
+    return snapshot;
+}
+
+void CustomGamePlayers::onReceiveChangeEventList(const std::string& senderName,
+                                                 const ChangeEventList& changeEventList)
 {
+    // On the host a non-empty sender is a remote client, and everything it asks for has to be
+    // something its own widgets could have produced: it may claim a seat for itself and change
+    // the house it occupies, nothing else. The whole transaction is judged first, so a list
+    // that mixes a legal and an illegal event changes nothing and is not rebroadcast.
+    if(bServer && !senderName.empty()) {
+        std::size_t refusedIndex = 0;
+        const LobbyAuthorization::Decision decision = LobbyAuthorization::authorizeClientTransaction(
+            makeSeatSnapshot(), senderName, changeEventList.changeEventList, refusedIndex);
+
+        if(decision != LobbyAuthorization::Decision::Allow) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "CustomGamePlayers: refusing lobby change %zu from '%s': %s",
+                        refusedIndex, senderName.c_str(),
+                        LobbyAuthorization::describeDecision(decision));
+            addInfoMessage("Ignored an unauthorized lobby change from " + senderName);
+            return;
+        }
+    }
+
     for(const ChangeEventList::ChangeEvent& changeEvent : changeEventList.changeEventList) {
+
+        // houseInfo has MAX_CUSTOM_GAME_PLAYERS entries and the slot arrives over the network:
+        // house-level events index it directly, player events index it as slot/2.
+        const bool isPlayerSlotEvent =
+            (changeEvent.eventType == ChangeEventList::ChangeEvent::EventType::ChangePlayer)
+            || (changeEvent.eventType == ChangeEventList::ChangeEvent::EventType::SetHumanPlayer);
+        const Uint32 slotLimit = isPlayerSlotEvent ? static_cast<Uint32>(numHouses) * 2u
+                                                   : static_cast<Uint32>(numHouses);
+        if(numHouses <= 0 || numHouses > MAX_CUSTOM_GAME_PLAYERS || changeEvent.slot >= slotLimit) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "CustomGamePlayers: ignoring lobby change event for slot %u",
+                        changeEvent.slot);
+            continue;
+        }
 
         switch(changeEvent.eventType) {
             case ChangeEventList::ChangeEvent::EventType::ChangeHouse: {
@@ -744,7 +941,7 @@ void CustomGamePlayers::onReceiveChangeEventList(const ChangeEventList& changeEv
         }
     }
 
-    if((pNetworkManager != nullptr) && bServer) {
+    if((pNetworkManager != nullptr) && bServer && !restoringSetup) {
         ChangeEventList changeEventList2 = getChangeEventList();
 
         pNetworkManager->sendChangeEventList(changeEventList2);
@@ -1014,9 +1211,20 @@ void CustomGamePlayers::onModDownloadComplete(bool success, const std::string& d
     }
     
     SDL_Log("CLIENT: Mod download complete (%zu bytes)", data.size());
-    
-    // Save the received mod
-    if(ModManager::instance().saveReceivedMod(hostModName, data)) {
+
+    if(hostModName.empty() || !ModManager::instance().isValidModName(hostModName)) {
+        SDL_Log("CLIENT: Refusing mod payload without a valid announced mod name");
+        addInfoMessage("Mod sync failed: unexpected payload");
+        bConfigMismatchDetected = true;
+        if(pNetworkManager != nullptr) {
+            pNetworkManager->sendModAck(false, "");
+        }
+        return;
+    }
+
+    // Verify the staged payload against the checksum the host announced *before* anything is
+    // installed or activated. A mismatch leaves the existing mod directory untouched.
+    if(ModManager::instance().saveReceivedMod(hostModName, data, hostModChecksum)) {
         SDL_Log("CLIENT: Mod '%s' saved successfully", hostModName.c_str());
         
         // Switch to the new mod
@@ -1059,8 +1267,10 @@ void CustomGamePlayers::onModDownloadComplete(bool success, const std::string& d
             }
         }
     } else {
-        SDL_Log("CLIENT: Failed to save mod '%s'", hostModName.c_str());
-        addInfoMessage("Failed to save mod: " + hostModName);
+        // Either the payload was malformed or it did not match the announced checksum; in
+        // both cases nothing was installed and the previously active mod is untouched.
+        SDL_Log("CLIENT: Refused mod '%s' (verification or unpacking failed)", hostModName.c_str());
+        addInfoMessage("Mod rejected before installation: " + hostModName);
         bConfigMismatchDetected = true;
         
         // Send failure ACK
@@ -1122,7 +1332,16 @@ void CustomGamePlayers::checkAllClientsReady() {
     if(!bServer || !bWaitingForModAcks) {
         return;
     }
-    
+
+    // The countdown is what commits everyone to the match: it sends STARTGAME and, on the relay,
+    // moves the room into its match phase. Once that has happened, "we noticed a problem" is too
+    // late, so the check belongs here rather than only in update().
+    if(bConfigMismatchDetected) {
+        SDL_Log("HOST: not starting - a content mismatch was reported");
+        bWaitingForModAcks = false;
+        return;
+    }
+
     // Get list of all connected remote peers (humans only). AI slots are not peers.
     std::set<std::string> connectedPlayers;
     if (pNetworkManager != nullptr) {
@@ -1152,9 +1371,12 @@ void CustomGamePlayers::checkAllClientsReady() {
         
         // Now actually start the game
         unsigned int timeLeft = 3000;  // 3 seconds countdown
-        startGameTime = SDL_GetTicks() + timeLeft;
-        pNetworkManager->sendStartGame(timeLeft);
-        
+        if(!pNetworkManager->sendStartGame(timeLeft)) {
+            addInfoMessage("The match could not start because a player disconnected or was not ready.");
+            return;
+        }
+        if(!pNetworkManager->isDirectSession()) startGameTime = SDL_GetTicks() + timeLeft;
+        else addInfoMessage("Confirming the final players before starting...");
         disableAllDropDownBoxes();
         
         // Send Discord presence with game details
@@ -1224,16 +1446,40 @@ void CustomGamePlayers::updateDiscordGameStarting() {
     DiscordManager::instance().setGameStarting(mapName, modName, playerDetails, playerCount);
     
     // Send game start notification to metaserver (which sends Discord webhook)
+#ifndef __EMSCRIPTEN__
     if(pNetworkManager != nullptr) {
         MetaServerClient* metaServer = pNetworkManager->getMetaServerClient();
         if(metaServer != nullptr) {
             metaServer->announceGameStart(mapName, modName, playerDetails);
         }
     }
+#endif
 }
 
 void CustomGamePlayers::onNext()
 {
+    if(setup && setup->online) {
+        bool hasOpenSeat = false;
+        for(int i = 0; i < numHouses; ++i) {
+            hasOpenSeat |= houseInfo[i].player1DropDown.getSelectedEntryIntData() == PLAYER_OPEN;
+            if(gameInitSettings.isMultiplePlayersPerHouse())
+                hasOpenSeat |= houseInfo[i].player2DropDown.getSelectedEntryIntData() == PLAYER_OPEN;
+        }
+        if(!hasOpenSeat) {
+            openWindow(MsgBox::create(_("Choose Open for a player slot before creating an online lobby.\nLeave a place for another player to join.")));
+            return;
+        }
+        setup->players = getChangeEventList();
+        quit(MENU_SETUP_HOST);
+        return;
+    }
+    if(isCoopGameType(gameInitSettings.getGameType())
+       && (houseInfo[0].player1DropDown.getSelectedEntryIntData() != PLAYER_HUMAN
+           || houseInfo[0].player2DropDown.getSelectedEntryIntData() == PLAYER_OPEN
+           || houseInfo[0].player2DropDown.getSelectedEntryIntData() == PLAYER_CLOSED)) {
+        openWindow(MsgBox::create(_("Wait for your co-op partner, or select a QuantBot.")));
+        return;
+    }
     // check if we have at least two houses on the map and if we have more than one team
     int numUsedHouses = 0;
     int numTeams = 0;
@@ -1296,14 +1542,14 @@ void CustomGamePlayers::onNext()
         }
     }
 
-    if(numUsedHouses < 2) {
+    if(numUsedHouses < 2 && !isCoopGameType(gameInitSettings.getGameType())) {
         // No game possible with only 1 house
         openWindow(MsgBox::create(_("At least 2 houses must be controlled\nby a human player or an AI player!")));
     } else if(bDuplicateHouse) {
         openWindow(MsgBox::create(_("The same house cannot be used twice.")));
     } else if(bDuplicateColor) {
         openWindow(MsgBox::create(_("The same color cannot be used twice.")));
-    } else if(numTeams < 2) {
+    } else if(numTeams < 2 && !isCoopGameType(gameInitSettings.getGameType())) {
         // No game possible with only 1 team
         openWindow(MsgBox::create(_("There must be at least two different teams!")));
     } else {
@@ -1331,20 +1577,64 @@ void CustomGamePlayers::onNext()
             
             // Send version and config hashes to all players for verification
             pNetworkManager->sendConfigHash(quantBotHash, objectDataHash, VERSIONSTRING);
-            
-            // Send mod info for mod sync
-            std::string modName = ModManager::instance().getActiveModName();
-            std::string modChecksum = ModManager::instance().getEffectiveChecksums().combined;
-            SDL_Log("HOST: Sending mod info: mod='%s', checksum=%s", modName.c_str(), modChecksum.c_str());
-            pNetworkManager->sendModInfo(modName, modChecksum);
-            
-            // Wait for all clients to acknowledge mod sync before starting
-            // The actual game start will happen in checkAllClientsReady() after all ACKs
+
             clientsAckedMod.clear();
             bWaitingForModAcks = true;
-            addInfoMessage("Waiting for clients to sync mod...");
-            SDL_Log("HOST: Waiting for mod ACKs from clients before starting game");
-            
+
+            if(pNetworkManager->supportsModTransfer()) {
+                // Send mod info for mod sync
+                std::string modName = ModManager::instance().getActiveModName();
+                std::string modChecksum = ModManager::instance().getEffectiveChecksums().combined;
+                SDL_Log("HOST: Sending mod info: mod='%s', checksum=%s", modName.c_str(), modChecksum.c_str());
+                pNetworkManager->sendModInfo(modName, modChecksum);
+
+                // Wait for all clients to acknowledge mod sync before starting
+                // The actual game start will happen in checkAllClientsReady() after all ACKs
+                addInfoMessage("Waiting for clients to sync mod...");
+                SDL_Log("HOST: Waiting for mod ACKs from clients before starting game");
+            } else {
+                // Crossplay carries bundled content only: there is nothing to transfer and so
+                // nothing to acknowledge. Matching content was required to be admitted to the
+                // room, but that was checked against whatever was active *then* - and the lobby
+                // lets the host pick a different mod afterwards. So compare again, now, against
+                // what is actually about to be played, and refuse rather than report agreement
+                // nobody established.
+                std::string reason;
+                const NetworkManager::ContentCheck check = pNetworkManager->checkRelayContent(
+                    quantBotHash, objectDataHash, VERSIONSTRING, reason);
+                if(check == NetworkManager::ContentCheck::Mismatch) {
+                    bWaitingForModAcks = false;
+                    onConfigMismatch(reason);
+                    return;
+                }
+                if(check == NetworkManager::ContentCheck::AwaitingPeer) {
+                    // Recoverable: a peer that has joined but whose content has not arrived yet.
+                    // Say so and let the host try again rather than killing the lobby.
+                    bWaitingForModAcks = false;
+                    addInfoMessage(reason);
+                    return;
+                }
+
+                // Matching content is not the only thing a direct match needs. Having a channel
+                // to each guest says nothing about whether the guests reached each other, and a
+                // match started across a missing guest-to-guest link loses that pair's commands
+                // with no error anywhere. Also recoverable: the link usually completes a moment
+                // later, so this asks the host to try again rather than ending the lobby.
+                if(!pNetworkManager->isMeshReady()) {
+                    bWaitingForModAcks = false;
+                    const std::string blocked = pNetworkManager->getMeshBlockedReason();
+                    addInfoMessage(blocked.empty()
+                        ? std::string(_("Not every player is connected to every other player yet."))
+                        : blocked);
+                    return;
+                }
+
+                for(const std::string& peerName : pNetworkManager->getConnectedPeers()) {
+                    clientsAckedMod.insert(peerName);
+                }
+                addInfoMessage(_("Everyone is using the same game content."));
+            }
+
             // Don't start game yet - will be started when all clients ACK
             // For single-player or if no other clients, check immediately
             checkAllClientsReady();
@@ -1359,6 +1649,10 @@ void CustomGamePlayers::onNext()
 void CustomGamePlayers::addAllPlayersToGameInitSettings()
 {
     gameInitSettings.clearHouseInfo();
+    if(isCoopGameType(gameInitSettings.getGameType())) {
+        for(const auto& enemy : fixedCoopHouses)
+            if(enemy.houseID != gameInitSettings.getHouseID()) gameInitSettings.addHouseInfo(enemy);
+    }
 
     for(int i=0;i<numHouses;i++) {
         HouseInfo& curHouseInfo = houseInfo[i];
@@ -1371,6 +1665,12 @@ void CustomGamePlayers::addAllPlayersToGameInitSettings()
         int player2 = curHouseInfo.player2DropDown.getSelectedEntryIntData();
         std::string player2name = curHouseInfo.player2DropDown.getSelectedEntry();
 
+        if(isCoopGameType(gameInitSettings.getGameType())) {
+            houseID = gameInitSettings.getHouseID();
+            team = 1;
+            for(const auto& fixed : fixedCoopHouses)
+                if(fixed.houseID == houseID) colorOfHouse = fixed.colorOfHouse;
+        }
         GameInitSettings::HouseInfo newHouseInfo((HOUSETYPE) houseID, team);
         colorOfHouse = resolveSelectedColorSlot(colorOfHouse, houseID);
         if(isValidHouseColorSlot(colorOfHouse)) {
@@ -1427,6 +1727,11 @@ bool CustomGamePlayers::addPlayerToHouseInfo(GameInitSettings::HouseInfo& newHou
 
 void CustomGamePlayers::onCancel()
 {
+    if(setup) {
+        setup->players = getChangeEventList();
+        quit(MENU_SETUP_MAP);
+        return;
+    }
     quit();
 }
 
@@ -1652,7 +1957,7 @@ void CustomGamePlayers::onChangeHousesDropDownBoxes(bool bInteractive, int house
             }
         }
 
-        if(gameInitSettings.getGameType() == GameType::LoadMultiplayer) {
+        if(gameInitSettings.getGameType() == GameType::LoadMultiplayer || isCoopGameType(gameInitSettings.getGameType())) {
             // no house changes possible
             continue;
         }
@@ -1755,6 +2060,18 @@ void CustomGamePlayers::onBonusColorCheckbox(int houseInfoNum) {
 }
 
 void CustomGamePlayers::onChangePlayerDropDownBoxes(bool bInteractive, int boxnum) {
+    if(bInteractive && (boxnum < 0 || boxnum >= numHouses * 2)) return;
+    if(bInteractive && pNetworkManager != nullptr
+       && !LobbyAuthorization::mayConfigurePlayerSlot(editableSeats, settings.general.playerName,
+                                                       static_cast<Uint32>(boxnum), bServer)) {
+        auto& box = boxnum % 2 == 0 ? houseInfo[boxnum / 2].player1DropDown
+                                   : houseInfo[boxnum / 2].player2DropDown;
+        const int previous = lastPlayerSelections[boxnum];
+        for(int i = 0; i < box.getNumEntries(); ++i) {
+            if(box.getEntryIntData(i) == previous) { box.setSelectedItem(i); break; }
+        }
+        return;
+    }
     if(bInteractive && boxnum >= 0 && pNetworkManager != nullptr) {
         DropDownBox& dropDownBox = (boxnum % 2 == 0) ? houseInfo[boxnum / 2].player1DropDown : houseInfo[boxnum / 2].player2DropDown;
 
@@ -1770,6 +2087,10 @@ void CustomGamePlayers::onChangePlayerDropDownBoxes(bool bInteractive, int boxnu
 }
 
 void CustomGamePlayers::onClickPlayerDropDownBox(int boxnum) {
+    if(boxnum < 0 || boxnum >= numHouses * 2) return;
+    if(pNetworkManager != nullptr && LobbyAuthorization::authorizeClientEvent(
+        makeSeatSnapshot(), settings.general.playerName,
+        ChangeEventList::ChangeEvent(boxnum, settings.general.playerName)) != LobbyAuthorization::Decision::Allow) return;
     DropDownBox& dropDownBox = (boxnum % 2 == 0) ? houseInfo[boxnum / 2].player1DropDown : houseInfo[boxnum / 2].player2DropDown;
 
     if(dropDownBox.getSelectedEntryIntData() == PLAYER_CLOSED) {
@@ -1957,6 +2278,13 @@ void CustomGamePlayers::setPlayer2Slot(const std::string& playername, int slot) 
 }
 
 void CustomGamePlayers::checkPlayerBoxes() {
+    if(isCoopGameType(gameInitSettings.getGameType())) {
+        auto& shared = houseInfo[0];
+        shared.houseDropDown.setEnabled(false);
+        shared.teamDropDown.setEnabled(false);
+        shared.bonusColorCheckbox.setEnabled(false);
+        shared.colorDropDown.setEnabled(false);
+    }
     int numPlayers = 0;
 
     for(int i=0;i<numHouses;i++) {
@@ -2001,6 +2329,25 @@ void CustomGamePlayers::checkPlayerBoxes() {
                 curHouseInfo.player2DropDown.setEnabled(bEnableDropDown2);
             }
             curHouseInfo.player2Label.setVisible(true);
+        }
+    }
+
+    editableSeats = makeSeatSnapshot();
+    for(int slot = 0; slot < numHouses * 2; ++slot) {
+        auto& box = slot % 2 == 0 ? houseInfo[slot / 2].player1DropDown
+                                : houseInfo[slot / 2].player2DropDown;
+        lastPlayerSelections[slot] = box.getSelectedEntryIntData();
+        if(pNetworkManager != nullptr) {
+            const bool editable = LobbyAuthorization::mayConfigurePlayerSlot(
+                editableSeats, settings.general.playerName, slot, bServer);
+            const bool loadedBot = gameInitSettings.getGameType() == GameType::LoadMultiplayer
+                && editableSeats.slots[slot].kind == LobbyAuthorization::SlotKind::AI;
+            box.setEnabled(editable && !loadedBot && box.isVisible());
+            // Disabled dropdowns have a separate click-to-claim path. Protect that path too,
+            // so clicking another player's support bot cannot silently move/swap the human.
+            box.setOnClickEnabled(LobbyAuthorization::authorizeClientEvent(editableSeats,
+                settings.general.playerName, ChangeEventList::ChangeEvent(slot, settings.general.playerName))
+                == LobbyAuthorization::Decision::Allow);
         }
     }
 

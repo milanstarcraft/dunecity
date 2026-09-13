@@ -68,6 +68,9 @@ private:
     PictureLabel logoPicture;
     PictureLabel buttonBorder;
 
+    TextButton      continueButton, customButton, onlineButton, loadButton;
+    bool canContinue = false;
+    TextButton      campaignButton;
     TextButton      modesButton;
     TextButton      dune2rEditorButton;
     bool            enlargedStartMenus = false;

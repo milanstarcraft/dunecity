@@ -33,6 +33,7 @@
 #include <players/HumanPlayer.h>
 #include <misc/SDL2pp.h>
 #include <CursorManager.h>
+#include <Network/GameStateDigest.h>
 #include <dunecity/CitySimulation.h>
 #include <dunecity/CityOverlay.h>
 
@@ -297,6 +298,9 @@ public:
         This method opens the city budget window.
     */
     void onCityBudget();
+    void onFeedback();
+    void onSkipMission();
+    bool canSkipMission() const;
 
     /**
         Cycles the local Dune2R presentation zoom without changing game state.
@@ -899,7 +903,7 @@ private:
     bool    finishedLevel = false;              ///< Set, when the game is really finished and the end message was shown
 
     std::unique_ptr<GameInterface>          pInterface;                             ///< This is the whole interface (top bar and side bar)
-    std::unique_ptr<InGameMenu>             pInGameMenu;                            ///< This is the menu that is opened by the option button
+    std::unique_ptr<Window>                 pInGameMenu;                            ///< This is the menu that is opened by the option button
     std::unique_ptr<MentatHelp>             pInGameMentat;                          ///< This is the mentat dialog opened by the mentat button
     std::unique_ptr<WaitingForOtherPlayers> pWaitingForOtherPlayers;                ///< This is the dialog that pops up when we are waiting for other players during network hangs
     Uint32                                  startWaitingForOtherPlayersTime = 0;    ///< The time in milliseconds when we started waiting for other players
@@ -971,6 +975,8 @@ private:
     
     // Multiplayer budget negotiation state
     std::vector<PendingBudgetChange> pendingBudgetChanges;
+    /// Upper bound on tracked clients; the ENet host has 32 peer slots.
+    static constexpr size_t kMaxTrackedClients = 32;
     std::map<Uint32, ClientPerformanceStats> clientStats;  // Host only
     
     // Track previous budget to avoid false DESYNC detection.
@@ -999,6 +1005,47 @@ private:
     bool handleNetworkUpdates();
     void initializeReplay();
     void initializeNetwork();
+
+    /**
+        Builds the deterministic fingerprint described in Network/GameStateDigest.h.
+
+        Const and side-effect free: it reads simulation state and nothing else, so calling it
+        can never be the reason two peers disagree.
+    */
+    GameStateDigest::Digest computeStateDigest() const;
+
+    /// Produces our digest on schedule, sends it, and compares anything already received.
+    void updateStateDigests();
+
+    /**
+        Applies a digest another peer produced.
+        \param  peerName    the sending player
+        \param  digest      their fingerprint
+    */
+    void onRemoteStateDigest(const std::string& peerName, const GameStateDigest::Digest& digest);
+
+    /// Reports a divergence to the player, once per match.
+    void reportStateDivergence(const std::string& peerName,
+                               const GameStateDigest::Digest& ours,
+                               const GameStateDigest::Digest& theirs);
+
+    /// Our recent digests, oldest first; bounded by GameStateDigest::kDigestHistory.
+    std::deque<GameStateDigest::Digest> localStateDigests;
+    /// Digests from peers that arrived before we reached that cycle; bounded the same way.
+    std::deque<std::pair<std::string, GameStateDigest::Digest>> pendingRemoteDigests;
+    /// Set once a divergence has been reported, so the news ticker is not flooded.
+    bool   stateDivergenceReported = false;
+    /// The last cycle a digest was produced for.
+    Uint32 lastStateDigestCycle = 0;
+    /// Set when the lockstep wait has been abandoned, so it is only reported once.
+    bool   lockstepStallReported = false;
+    /**
+        How long the match waits for a player's commands before it gives up.
+
+        Generous enough that ordinary jitter, a long load or a brief stall never trips it, and
+        short enough that nobody is left staring at "waiting for other players" forever.
+    */
+    static constexpr Uint32 LOCKSTEP_STALL_TIMEOUT_MS = 45000;
     void processTargetRequests();
     void processPathRequests();
 

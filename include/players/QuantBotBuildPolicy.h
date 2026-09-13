@@ -144,11 +144,19 @@ inline int spendableCredits(int credits, int strategicCost) {
 
 // Keep city construction first; then fund air before ground factories can
 // repeatedly consume its allocation. Light factories still precede heavy ones.
-inline int productionPlanningPriority(bool city, Uint32 item, bool waitingToPlace) {
-    if (city && item == Structure_ConstructionYard) return waitingToPlace ? 3 : 2;
+inline int productionPlanningPriority(bool city, Uint32 item, bool waitingToPlace, bool firstTransport = false) {
+    if (firstTransport && item == Structure_HighTechFactory) return 4;
+    if ((city || firstTransport) && item == Structure_ConstructionYard) return waitingToPlace ? 3 : 2;
     if (item == Structure_HighTechFactory) return 1;
     if (item == Structure_LightFactory) return 0;
     return -1;
+}
+
+inline int carryallTarget(int militaryValue, int workers) {
+    return std::max(workers > 0 ? 1 : 0, (militaryValue + workers * 500) / 3000);
+}
+inline bool firstTransportNeeded(bool available, int heavyFactories, int workers, int carryalls) {
+    return available && heavyFactories > 0 && workers > 0 && carryalls == 0;
 }
 
 struct AirProductionState {
@@ -168,7 +176,9 @@ inline AirDecision chooseAirProduction(const AirProductionState& s) {
     const bool carryallDue = s.carryallAvailable && s.carryalls < s.carryallTarget
         && s.carryallPrice > 0 && s.spendable >= s.carryallPrice;
     // Bootstrap transport, but a growing carryall target must not starve combat air.
-    if (carryallDue && s.carryalls == 0) return {AirOrder::Carryall, "first_carryall"};
+    if (s.carryalls == 0 && s.carryallTarget > 0 && s.carryallAvailable && s.carryallPrice > 0)
+        return carryallDue ? AirDecision{AirOrder::Carryall, "first_carryall"}
+            : AirDecision{AirOrder::None, "save_first_carryall"};
     const bool airDue = int64_t(s.vehiclePlanValue) * s.airTargetBps
         > int64_t(s.airCommittedValue) * 10000;
     const bool fitsArmy = int64_t(s.armyValue) + s.ornithopterPrice <= s.armyLimit;
@@ -208,7 +218,8 @@ inline int baseDefenderTarget(int combatUnits) {
 }
 
 // Demand valves have different maxima: R=2000, C/I=1500. Compare
-// their fractions of maximum using integers; counts only break demand ties.
+// fractions of maximum. Among similarly urgent needs, committed plot counts
+// prevent a small persistent demand difference starving an entire sector.
 inline int normalizedZoneDemand(Uint32 item, int demand) {
     return std::clamp(demand, 0, item == Structure_ZoneResidential ? 2000 : 1500)
         * (item == Structure_ZoneResidential ? 3 : 4);
@@ -223,35 +234,32 @@ inline std::array<Uint32, 3> rankZones(int residential, int commercial, int indu
         {Structure_ZoneIndustrial, industrial, indDemand, 1},
         {Structure_ZoneCommercial, commercial, comDemand, 1}
     }};
-    const Uint32 preferred = resDemand < 500
-        ? (comDemand < 500 && indDemand > 0 ? Structure_ZoneIndustrial
-            : comDemand > 0 ? Structure_ZoneCommercial : NONE_ID) : NONE_ID;
-    std::stable_sort(candidates.begin(), candidates.end(), [bootstrap,preferred](const auto& a, const auto& b) {
-        const bool missingA = bootstrap && a.count == 0;
-        const bool missingB = bootstrap && b.count == 0;
-        if(missingA != missingB) return missingA;
-        if ((a.item == preferred) != (b.item == preferred)) return a.item == preferred;
-        const int demandA = normalizedZoneDemand(a.item, a.demand);
-        const int demandB = normalizedZoneDemand(b.item, b.demand);
-        if(demandA != demandB) return demandA > demandB;
-        return a.count * b.weight < b.count * a.weight;
+    int strongestDemand = 0;
+    for (const auto& c : candidates)
+        strongestDemand = std::max(strongestDemand, normalizedZoneDemand(c.item,c.demand));
+    // Within 20% of the strongest normalized demand, use the established 3:1:1
+    // plot balance. Includes queued plots so multiple yards do not repeat the
+    // same order. Weaker demands remain fallbacks if stronger types lack sites.
+    // A shared strongest-demand reference keeps the sort ordering transitive.
+    std::stable_sort(candidates.begin(), candidates.end(), [bootstrap,strongestDemand](const auto& a, const auto& b) {
+        const bool hedgeA = bootstrap && a.item == Structure_ZoneResidential && a.count == 0 && a.demand > 0;
+        const bool hedgeB = bootstrap && b.item == Structure_ZoneResidential && b.count == 0 && b.demand > 0;
+        if (hedgeA != hedgeB) return hedgeA;
+        const int demandA = normalizedZoneDemand(a.item,a.demand);
+        const int demandB = normalizedZoneDemand(b.item,b.demand);
+        const bool urgentA = demandA > 0 && demandA*5 >= strongestDemand*4;
+        const bool urgentB = demandB > 0 && demandB*5 >= strongestDemand*4;
+        if (urgentA != urgentB) return urgentA;
+        if (urgentA && a.count*b.weight != b.count*a.weight)
+            return a.count*b.weight < b.count*a.weight;
+        if (demandA != demandB) return demandA > demandB;
+        return a.count*b.weight < b.count*a.weight;
     });
     std::array<Uint32, 3> result{{NONE_ID, NONE_ID, NONE_ID}};
     int index = 0;
-    for(const auto& candidate : candidates) {
-        if(candidate.demand > 0 || (bootstrap && candidate.count == 0)) {
-            result[index++] = candidate.item;
-        }
-    }
+    for (const auto& candidate : candidates)
+        if (candidate.demand > 0) result[index++] = candidate.item;
     return result;
-}
-
-// Infill housing when R demand reaches 500; retain bootstrap and demand balancing
-// when no residential gap is available.
-inline void prioritizeResidentialInfill(std::array<Uint32,3>& ranked,int demand,bool infill) {
-    if (demand<500 || !infill) return;
-    const auto it=std::find(ranked.begin(),ranked.end(),Structure_ZoneResidential);
-    if (it!=ranked.end()) std::rotate(ranked.begin(),it,it+1);
 }
 
 // A road is already foundation: a bulk slab must not erase it. Coordinates
@@ -293,14 +301,49 @@ inline int openingSpiceRefineries(int sustainableHarvesters) {
 inline int fundedSpiceHarvesters(int sustainable, int refineries) {
     return std::max(0, std::min(sustainable, std::max(0, refineries) * 3));
 }
-// Compare the capacity actually needed, not the nominal cost per power of
-// a reactor that would sit mostly idle. A shortage of legal wind sites can
-// justify paying for compact generation. Cash for other work stays protected.
+// Compare useful capacity, available space and the ability to fund a larger
+// reserve. Small starts keep cheap wind; rich cities and blackout recovery
+// prefer nuclear. Cash already committed to other work stays protected.
 inline bool preferNuclearPower(int need, int windOutput, int windPrice, int nuclearPrice,
-                              int availableWindSites, int cash, int protectedCash) {
+                              int availableWindSites, int cash, int protectedCash, bool powerShortage = false) {
     if (need <= 0 || windOutput <= 0 || cash < nuclearPrice + std::max(0,protectedCash)) return false;
     const int windCount = (need + windOutput - 1) / windOutput;
-    return availableWindSites < windCount || int64_t(windCount) * windPrice > nuclearPrice;
+    // A rich city can afford useful spare capacity. During a blackout,
+    // restore enough capacity for zones to recover instead of topping up wind.
+    return powerShortage || int64_t(cash) >= int64_t(nuclearPrice) * 5 + std::max(0,protectedCash)
+        || availableWindSites < windCount || int64_t(windCount) * windPrice >= nuclearPrice;
+}
+// Start saving while the city still has power, once three windtraps' worth
+// of load needs another increment. This buys one compact growth reserve.
+inline bool planNuclearInvestment(int required, int produced, int growthReserve, int windOutput) {
+    return windOutput > 0 && required >= 3 * windOutput
+        && int64_t(produced) < int64_t(required) + growthReserve + windOutput;
+}
+
+// Emergency funding targets half the income left after power, with a 25%
+// coverage floor. Cut only after major losses with poor cash/operating margin;
+// restore in steps once full service is affordable again.
+inline int recoveryPoliceFunding(int current, int tax, int powerCost, int nominalCost,
+                                  int cash, bool majorLosses) {
+    current = std::clamp(current,0,100);
+    if (nominalCost <= 0) return 100;
+    const int available = std::max(0,tax-powerCost);
+    const int bill = int(int64_t(nominalCost)*current/100);
+    if (majorLosses && cash < 2000 && int64_t(bill)*4 > int64_t(available)*3) {
+        const int target = std::clamp(int(int64_t(available)*50/nominalCost),25,100);
+        return std::min(current,std::max(target,current-25));
+    }
+    if (current < 100 && (cash >= 5000 || int64_t(available) >= int64_t(nominalCost)*2))
+        return std::min(100,current+25);
+    return current;
+}
+
+// Reserve the latent load of existing lots even after blackout shrinkage.
+// Observed growth and latent growth overlap, so use the larger, not their sum.
+inline int cityGrowthPowerHeadroom(int zonePower, int matureZonePower, int observedGrowth,
+                                   int committedDemand) {
+    return std::max(0, committedDemand)
+        + std::max(std::max(0, observedGrowth), std::max(0, matureZonePower-zonePower));
 }
 inline int projectedPowerGrowth(int previous, int current, unsigned elapsed, unsigned horizon) {
     if (!elapsed || current <= previous) return 0;
@@ -340,8 +383,15 @@ inline bool needsProductionLane(int actual, int committed, int busy, int deficit
         && deficit >= factoryPrice && credits >= reserve + factoryPrice + 1000;
 }
 
-inline bool allAirFactoriesBuildingOrnithopters(int actual, int committed, int producing) {
-    return actual > 0 && committed == actual && producing == actual;
+// A carryall sharing the production line must not hide combat-air demand.
+// Count incoming factories and aircraft, and fund both the lane and its next unit.
+inline bool needsAirProductionLane(int actual, int committed, int busy, int capable,
+    int deficit, int credits, int reserve, int factoryPrice, int aircraftPrice,
+    int armyRoom, bool airLimit) {
+    return !airLimit && capable > 0 && aircraftPrice > 0 && armyRoom >= aircraftPrice
+        && actual > 0 && committed == actual && busy * 4 >= actual * 3
+        && deficit >= aircraftPrice
+        && credits >= reserve + factoryPrice + aircraftPrice + 1000;
 }
 
 inline bool needsKiting(int distance, int weaponRange, bool easy, bool groundTarget) {

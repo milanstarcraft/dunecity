@@ -66,6 +66,10 @@ public:
             team = stream.readSint32();
 
             Uint32 numPlayerInfo = stream.readUint32();
+            // A player info is two length-prefixed strings, so at least 8 bytes. On a
+            // packet-backed stream this refuses a count that cannot possibly be there before
+            // anything is allocated; file streams keep their existing behaviour.
+            stream.requireReadableElements(numPlayerInfo, 8);
             for(Uint32 i=0;i<numPlayerInfo;i++) {
                 playerInfoList.push_back(PlayerInfo(stream));
             }
@@ -105,7 +109,7 @@ public:
         \param  newHouseID          the house to play the campaign with
         \param  gameOptions         the options for this game
     */
-    GameInitSettings(HOUSETYPE newHouseID, const SettingsClass::GameOptionsClass& gameOptions);
+    GameInitSettings(HOUSETYPE newHouseID, const SettingsClass::GameOptionsClass& gameOptions, int startLevel = 1);
 
     /**
         Constructor for continuing a campaign at the specified mission
@@ -169,6 +173,11 @@ public:
 
     void save(OutputStream& stream) const;
     void migrateLegacyHouseColorSlots();
+    void enableCoop(bool campaign, const std::string& serverName);
+    static GameInitSettings readSaveSetup(InputStream& stream, HouseInfoList& houses);
+    void configureCoopSave(const GameInitSettings& saved, const HouseInfoList& houses);
+    void setScenarioData(const std::string& data) { filedata = data; }
+
 
     inline GameType getGameType() const { return gameType; };
     inline HOUSETYPE getHouseID() const { return houseID; };

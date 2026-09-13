@@ -153,7 +153,7 @@ Mentat::Mentat(House* associatedHouse, const std::string& playername, Difficulty
     retreatTimer = MILLI2CYCLES(60000); //turning off
 
 	// Different AI logic for Campaign. Assumption is if player is loading they are playing a campaign game
-	if ((currentGame->gameType == GameType::Campaign) || (currentGame->gameType == GameType::LoadSavegame) || (currentGame->gameType == GameType::Skirmish)) {
+	if ((isCampaignGameType(currentGame->gameType)) || (currentGame->gameType == GameType::LoadSavegame) || ((currentGame->gameType == GameType::Skirmish || currentGame->gameType == GameType::SkirmishCoop))) {
 		gameMode = GameMode::Campaign;
 	}
 	else {
@@ -310,7 +310,7 @@ void Mentat::update() {
 
 		// Allow Campaign AI (including support mode) one Repair Yard
 		// Note: supportMode sets gameMode to Custom, so check currentGame->gameType instead
-		if ((initialItemCount[Structure_RepairYard] == 0) && currentGame && currentGame->gameType == GameType::Campaign && currentGame->techLevel > 4) {
+		if ((initialItemCount[Structure_RepairYard] == 0) && currentGame && isCampaignGameType(currentGame->gameType) && currentGame->techLevel > 4) {
 			initialItemCount[Structure_RepairYard] = 1;
 			if (initialItemCount[Structure_Radar] == 0) {
 				initialItemCount[Structure_Radar] = 1;
@@ -2179,7 +2179,8 @@ void Mentat::handleHeavyFactory(const BuilderBase* pBuilder, MentatBuildContext&
 					if (ctx.money <= 3000) return false;
 					auto* citySim = currentGame->getCitySimulation();
 					int tax = citySim ? citySim->getCityTax() : 7;
-					int32_t annual = DuneCity::computeAnnualTaxRevenue(ctx.ownTotalPop, tax, ctx.ownAvgLandValue);
+					const int taxBaseEighths = citySim ? citySim->getHouseState(getHouse()->getHouseID()).taxBaseEighths : 0;
+					int32_t annual = DuneCity::computeAnnualTaxRevenue(taxBaseEighths, tax, ctx.ownAvgLandValue);
 					int creditsPerSec = annual / 60;
 					desiredCYs = 1 + creditsPerSec / 50;
 				} else {

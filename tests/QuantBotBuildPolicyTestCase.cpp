@@ -5,7 +5,9 @@
 #include <dunecity/PowerRules.h>
 #include <dunecity/VanillaEconomy.h>
 #include <catch2/catch_test_macros.hpp>
+#include <players/AirStrikePolicy.h>
 #include <players/QuantBotBuildPolicy.h>
+#include <players/CityEconomyInvestmentPolicy.h>
 #include <set>
 
 using namespace QuantBotBuildPolicy;
@@ -45,9 +47,104 @@ TEST_CASE("QuantBot does not build residential as a fallback against demand", "[
     for(auto item : rankZones(3, 1, 1, 0, -100, -100, false)) REQUIRE(item == NONE_ID);
 }
 
-TEST_CASE("QuantBot seeds missing jobs before relying on positive demand", "[quantbot][city]") {
-    REQUIRE(rankZones(3, 0, 0, 2000, -1500, -1500, true)[0] == Structure_ZoneIndustrial);
-    REQUIRE(rankZones(3, 0, 1, 2000, -1500, -1500, true)[0] == Structure_ZoneCommercial);
+TEST_CASE("QuantBot opening hedges with demanded housing without forcing missing jobs", "[quantbot][city]") {
+    REQUIRE(rankZones(0,0,0,2000,-1500,-1500,true)[0] == Structure_ZoneResidential);
+    REQUIRE(rankZones(3,0,0,2000,-1500,-1500,true)[0] == Structure_ZoneResidential);
+    REQUIRE(rankZones(3,0,0,2000,-1500,-1500,true)[1] == NONE_ID);
+    REQUIRE(rankZones(0,0,0,-100,500,0,true)[0] == Structure_ZoneCommercial);
+    REQUIRE(rankZones(0,0,0,0,0,0,true)[0] == NONE_ID);
+}
+
+TEST_CASE("City investment compares return per credit and protects the residential hedge", "[quantbot][city]") {
+    using namespace CityEconomyInvestmentPolicy;
+    Investment refinery{400,400,4,7500,1000};
+    Investment residential{100,100,2,3750,1000};
+    REQUIRE_FALSE(preferRefinery(refinery,residential,true,false)); // Four plots earn more for the same cash.
+    residential.annualIncome=30;
+    REQUIRE(preferRefinery(refinery,residential,true,false));
+    REQUIRE_FALSE(preferRefinery(refinery,residential,true,true)); // First demanded residential hedge.
+    REQUIRE_FALSE(preferRefinery(refinery,residential,false,false)); // Bays already cover the fleet.
+    refinery.delayCycles=horizonCycles;
+    REQUIRE_FALSE(preferRefinery(refinery,residential,true,false)); // No returns within the horizon.
+}
+
+TEST_CASE("Refinery expansion follows near-term workers and marginal delivered spice", "[quantbot][city]") {
+    using namespace CityEconomyInvestmentPolicy;
+    REQUIRE(factoryHarvesterTarget(40,120)==40);
+    REQUIRE(factoryHarvesterTarget(140,120)==120);
+    REQUIRE(factoryHarvesterTarget(0,120)==0);
+    // Four is not a production cap: factories continue toward the spice target,
+    // then the yard adds bays when predicted throughput requires them.
+    REQUIRE(factoryHarvesterTarget(120,120)==120);
+    REQUIRE_FALSE(processingCapacityNeeded(1,4,320,1757));
+    REQUIRE(processingCapacityNeeded(1,6,320,1757));
+    REQUIRE_FALSE(processingCapacityNeeded(2,6,320,1757)); // Queued bay already covers fleet.
+    REQUIRE_FALSE(considerRefinery(false,true,true)); // Factory + zoning run together.
+    REQUIRE(considerRefinery(false,true,false)); // Opening without any worker-capable factory.
+    REQUIRE(considerRefinery(true,false,true)); // Existing fleet needs unloading capacity.
+    REQUIRE_FALSE(considerRefinery(false,false,false)); // No need; keep yard for city growth.
+    REQUIRE(marginalSpiceIncome(120,40,false,400,1200)==0);
+    REQUIRE(marginalSpiceIncome(120,39,false,400,1200)==1200);
+    REQUIRE(marginalSpiceIncome(3,1,true,400,1200)==400);
+    REQUIRE(marginalSpiceIncome(3,1,false,400,1200)==0);
+}
+
+TEST_CASE("Factory economy priority balances workers with military without a refinery cap", "[quantbot][city]") {
+    using namespace CityEconomyInvestmentPolicy;
+    CHECK(preferFactoryHarvester(1,120,0,10000,300,true)); // Recover collapsed economy.
+    CHECK_FALSE(preferFactoryHarvester(4,120,600,10000,300,true)); // Army is too weak.
+    CHECK(preferFactoryHarvester(4,120,2400,10000,300,true)); // Enough cover to expand economy.
+    CHECK_FALSE(preferFactoryHarvester(5,120,2400,10000,300,true)); // Next worker yields to military.
+    CHECK(preferFactoryHarvester(80,120,10000,10000,300,true)); // No refinery-based ceiling.
+    CHECK(preferFactoryHarvester(4,120,600,10000,300,false)); // No available combat order to displace.
+    CHECK_FALSE(preferFactoryHarvester(120,120,10000,10000,300,true));
+}
+
+TEST_CASE("City opening grows beyond two workers before optional tech", "[quantbot][city]") {
+    using namespace CityEconomyInvestmentPolicy;
+    // 642 Moshpit: two workers, only 0-300 military value, 120 spice target.
+    for (int army : {0,150,300}) {
+        CHECK(preferFactoryHarvester(2,120,army,80000,300,true,true));
+        CHECK(preferFactoryHarvester(3,120,army,80000,300,true,true));
+    }
+    // Already queued workers count: do not duplicate the fourth from another factory.
+    CHECK_FALSE(openingWorkersNeeded(4,120));
+    CHECK_FALSE(preferFactoryHarvester(4,120,300,80000,300,true,true));
+    CHECK(preferFactoryHarvester(4,120,2400,80000,300,true,true));
+    CHECK(preferFactoryHarvester(60,120,80000,80000,300,true,true));
+    // Lower map/spice targets remain authoritative, including exhausted fields.
+    CHECK_FALSE(openingWorkersNeeded(2,2));
+    CHECK_FALSE(openingWorkersNeeded(0,0));
+    CHECK_FALSE(preferFactoryHarvester(2,2,0,80000,300,true,true));
+    CHECK_FALSE(preferFactoryHarvester(0,0,0,80000,300,true,true));
+    // Vanilla keeps its established army/worker balance.
+    CHECK_FALSE(preferFactoryHarvester(2,120,300,80000,300,true));
+}
+
+TEST_CASE("Refinery forecasts count the first delivery and only marginal shared-bay income", "[quantbot][city]") {
+    using namespace CityEconomyInvestmentPolicy;
+    // A new worker completes one full load within four minutes, not zero income
+    // followed by a second full harvesting delay. Existing fleet income is common.
+    CHECK(refineryProceeds(3,1,true,320,1757,1200,8200,1120,700,4)==686);
+    CHECK(refineryProceeds(3,1,false,320,1757,1200,8200,1120,700,4)==0);
+    CHECK(refineryProceeds(3,1,true,320,1757,1200,14000,1120,700,4)==0);
+    CHECK(refineryProceeds(6,1,false,320,1757,1200,8200,1120,700,4)>0);
+    CHECK(refineryProceeds(6,2,false,320,1757,1200,8200,1120,700,4)==0);
+    Investment refinery{526,320,4,9400,1000,686};
+    Investment mediumR{143,62,1,4350,1000};
+    CHECK(preferRefinery(refinery,mediumR,true,false)); // Useful bay/worker before factory supply exists.
+    CHECK_FALSE(preferRefinery(refinery,mediumR,considerRefinery(false,true,true),false));
+    refinery.confidence=500;
+    CHECK_FALSE(preferRefinery(refinery,mediumR,true,false)); // Dangerous/depleting field.
+}
+
+TEST_CASE("Tax investment forecasts reflect weak demand, pollution and the existing growth pipeline", "[quantbot][city]") {
+    using namespace CityEconomyInvestmentPolicy;
+    REQUIRE(zoneConfidence(2000,2000,0,0,0)==1000);
+    REQUIRE(zoneConfidence(0,2000,0,0,0)==0);
+    REQUIRE(zoneConfidence(2000,2000,160,0,0)==0);
+    REQUIRE(zoneConfidence(2000,2000,0,0,1)<zoneConfidence(2000,2000,0,0,0));
+    REQUIRE(zoneConfidence(200,2000,100,192,0)<zoneConfidence(2000,2000,0,0,0));
 }
 
 TEST_CASE("QuantBot expands tank production with surplus cash without unbounded factory growth", "[quantbot][production]") {
@@ -492,11 +589,17 @@ TEST_CASE("Light raiders evade tanks and prefer vulnerable mobile prey", "[quant
     REQUIRE_FALSE(isLightRaiderPreferredTarget(Structure_Refinery));
 }
 
-TEST_CASE("Only ornithopter saturation justifies extra air production", "[quantbot][production]") {
-    REQUIRE(allAirFactoriesBuildingOrnithopters(3,3,3));
-    REQUIRE_FALSE(allAirFactoriesBuildingOrnithopters(3,3,2)); // one carryall, idle or held
-    REQUIRE_FALSE(allAirFactoriesBuildingOrnithopters(3,4,3)); // incoming capacity
-    REQUIRE_FALSE(allAirFactoriesBuildingOrnithopters(0,0,0));
+TEST_CASE("Funded ornithopter backlog expands mixed air production", "[quantbot][production]") {
+    CHECK(needsAirProductionLane(1,1,1,1,1800,6000,1000,500,600,2000,false));
+    CHECK(needsAirProductionLane(3,3,3,1,1800,6000,1000,500,600,2000,false)); // two carryall lanes
+    CHECK(needsAirProductionLane(4,4,3,3,1800,6000,1000,500,600,2000,false));
+    CHECK_FALSE(needsAirProductionLane(3,4,3,3,1800,6000,1000,500,600,2000,false)); // pending factory
+    CHECK_FALSE(needsAirProductionLane(3,3,1,3,1800,6000,1000,500,600,2000,false)); // idle capacity
+    CHECK_FALSE(needsAirProductionLane(1,1,1,0,1800,6000,1000,500,600,2000,false)); // tech locked
+    CHECK_FALSE(needsAirProductionLane(1,1,1,1,569,6000,1000,500,600,2000,false)); // queued units meet most demand
+    CHECK_FALSE(needsAirProductionLane(1,1,1,1,1800,3000,1000,500,600,2000,false)); // cannot fund lane + unit
+    CHECK_FALSE(needsAirProductionLane(1,1,1,1,1800,6000,1000,500,600,50,false)); // current Sardaukar army cap
+    CHECK_FALSE(needsAirProductionLane(1,1,1,1,1800,6000,1000,500,600,2000,true));
 }
 
 TEST_CASE("Rocket turret power setting is independent of vanilla power bypass", "[quantbot][power]") {
@@ -690,6 +793,82 @@ TEST_CASE("Factory safety outranks frontage preferences without banning constrai
 }
 
 #include <players/SimpleArmyPolicy.h>
+#include <players/CampaignDifficultyPolicy.h>
+#include <misc/IMemoryStream.h>
+#include <misc/OMemoryStream.h>
+TEST_CASE("Campaign alliance gates overlapping houses and recovery independently of individual timers", "[quantbot][campaign]") {
+    using namespace CampaignDifficultyPolicy;
+    const auto easy=profile(0,8), medium=profile(1,8), hard=profile(2,8), brutal=profile(3,8);
+    Pressure one{1,2,600,1000};
+    REQUIRE_FALSE(canLaunch(easy,one,10000,0,100));
+    REQUIRE_FALSE(canLaunch(medium,one,10000,0,100));
+    REQUIRE(canLaunch(hard,one,10000,0,100));
+    Pressure two{2,4,1200,1000};
+    REQUIRE_FALSE(canLaunch(hard,two,10000,0,100));
+    REQUIRE(canLaunch(brutal,two,10000,0,100));
+    Pressure ended{0,0,0,1000};
+    REQUIRE_FALSE(canLaunch(easy,ended,1099,0,100));
+    REQUIRE(canLaunch(easy,ended,1100,0,100));
+    REQUIRE_FALSE(canLaunch(easy,{},1100,1200,100));
+    REQUIRE_FALSE(fits(easy,{1,4,1400,0},300)); // Value cap, even with a troop slot.
+    REQUIRE_FALSE(fits(easy,{1,5,500,0},50)); // Count cap, even with cheap infantry.
+    // A large first army cannot consume the second Hard house's attack slot.
+    const Pressure largeArmy{1,40,30000,1000};
+    REQUIRE(canLaunch(hard,largeArmy,10000,0,100));
+    REQUIRE(canLaunch(brutal,largeArmy,10000,0,100));
+    REQUIRE(fits(hard,largeArmy,1000));
+    REQUIRE(fits(brutal,largeArmy,1000));
+    REQUIRE_FALSE(canLaunch(hard,{},1100,1200,100));
+    REQUIRE_FALSE(canLaunch(brutal,ended,1099,0,100));
+}
+TEST_CASE("Campaign wave membership and deadlines survive stream round trips", "[quantbot][campaign][save]") {
+    using namespace CampaignDifficultyPolicy;
+    Wave original; original.initialized=true; original.opening=1234;
+    original.launched=5678; original.lastActive=9000; original.front=71; original.members={7,19,55};
+    OMemoryStream out; out.open(); original.save(out);
+    IMemoryStream in(out.getData(),out.getDataLength()); Wave restored; restored.load(in);
+    REQUIRE(restored.initialized==original.initialized);
+    REQUIRE(restored.opening==original.opening);
+    REQUIRE(restored.launched==original.launched);
+    REQUIRE(restored.lastActive==original.lastActive);
+    REQUIRE(restored.members==original.members);
+    REQUIRE(restored.front==original.front);
+}
+TEST_CASE("Campaign windtrap accounting covers commitments without duplicate generators", "[quantbot][campaign][power]") {
+    using namespace CampaignDifficultyPolicy;
+    REQUIRE(needsWindtrap(100,140,0,0,false));
+    REQUIRE(needsWindtrap(150,140,20,0,false));
+    REQUIRE(needsWindtrap(150,140,0,20,false));
+    REQUIRE_FALSE(needsWindtrap(150,140,0,10,false));
+    REQUIRE_FALSE(needsWindtrap(100,140,0,0,true));
+}
+TEST_CASE("Campaign attack sizes scale with difficulty and retain a reserve", "[quantbot][combat]") {
+    std::vector<SimpleArmyPolicy::Responder> army;
+    for (unsigned i=0; i<20; ++i) army.push_back({i+1,100,0});
+    REQUIRE(SimpleArmyPolicy::limitedAttack(2000,0,25,army).size()==5);
+    REQUIRE(SimpleArmyPolicy::limitedAttack(2000,0,40,army).size()==8);
+    REQUIRE(SimpleArmyPolicy::limitedAttack(2000,0,50,army).size()==10);
+    REQUIRE(SimpleArmyPolicy::limitedAttack(2000,0,60,army).size()==12);
+    REQUIRE(SimpleArmyPolicy::limitedAttack(2000,0,0,army).empty());
+    REQUIRE(SimpleArmyPolicy::limitedAttack(2000,400,25,army).size()==1);
+    REQUIRE(SimpleArmyPolicy::limitedAttack(2000,500,25,army).empty());
+    REQUIRE(SimpleArmyPolicy::limitedAttack(2000,800,25,army).empty());
+}
+TEST_CASE("Campaign waves handle mixed costs and small armies without stacking", "[quantbot][combat]") {
+    using namespace SimpleArmyPolicy;
+    const std::vector<Responder> army{{9,300,0},{3,120,0},{1,600,0},{4,60,0}};
+    // A large first candidate cannot prevent affordable troops being chosen.
+    REQUIRE(limitedAttack(1080,0,25,army)==std::vector<uint32_t>{3,4});
+    auto reversed=army; std::reverse(reversed.begin(),reversed.end());
+    REQUIRE(limitedAttack(1080,0,25,reversed)==limitedAttack(1080,0,25,army));
+    REQUIRE(limitedAttack(300,0,25,{{7,300,0}})==std::vector<uint32_t>{7});
+    REQUIRE(limitedAttack(600,300,25,{{8,300,0}}).empty());
+    REQUIRE(limitedAttack(600,0,0,{{8,300,0}}).empty());
+    REQUIRE(limitedAttack(600,0,25,{{8,0,0}}).empty());
+    REQUIRE(attackBudget(INT32_MAX,100)==INT32_MAX);
+    REQUIRE(attackBudget(1000,150)==1000);
+    REQUIRE(attackBudget(-1000,25)==0);
+}
 TEST_CASE("Local defence scales to the enemy instead of a fixed reserve", "[quantbot][combat]") {
     using namespace SimpleArmyPolicy;
     std::vector<Responder> army;
@@ -816,18 +995,12 @@ TEST_CASE("Local service property lookup matches full scans at map and bucket ed
     }
 }
 
-TEST_CASE("Residential infill takes priority only once housing demand reaches 500", "[quantbot][city]") {
-    auto ranked=rankZones(60,4,9,500,1500,1500,false);
-    REQUIRE(ranked[0]==Structure_ZoneCommercial);
-    prioritizeResidentialInfill(ranked,500,true);
-    REQUIRE(ranked[0]==Structure_ZoneResidential);
-    REQUIRE(ranked[1]==Structure_ZoneCommercial);
-    ranked=rankZones(60,4,9,0,1500,1500,false);
-    prioritizeResidentialInfill(ranked,0,true);
-    REQUIRE(ranked[0]==Structure_ZoneCommercial);
-    ranked=rankZones(60,4,9,1,1500,1500,false);
-    prioritizeResidentialInfill(ranked,1,false);
-    REQUIRE(ranked[0]==Structure_ZoneCommercial);
+TEST_CASE("Housing gaps do not suppress stronger jobs demand", "[quantbot][city]") {
+    CHECK(rankZones(60,4,9,500,1500,1500,false)[0] == Structure_ZoneCommercial);
+    // Logged house 2: previously forced housing despite greater industry demand.
+    CHECK(rankZones(18,10,5,1685,224,1500,false)[0] == Structure_ZoneIndustrial);
+    CHECK(rankZones(40,20,2,500,1500,1500,false)[0] == Structure_ZoneIndustrial);
+    CHECK(rankZones(60,4,9,2000,0,0,false)[0] == Structure_ZoneResidential);
 }
 
 #include <players/CityPlanningPolicy.h>
@@ -911,18 +1084,32 @@ TEST_CASE("Each blocked yard sweeps all map batches even when yard count equals 
     }
 }
 
-TEST_CASE("City zone priorities switch to C and I below the 500 demand thresholds", "[quantbot][city]") {
-    REQUIRE(rankZones(40,20,2,499,500,1500,false)[0]==Structure_ZoneCommercial);
-    REQUIRE(rankZones(40,20,2,499,499,1,false)[0]==Structure_ZoneIndustrial);
-    REQUIRE(rankZones(40,20,2,499,499,0,false)[0]==Structure_ZoneCommercial);
-    REQUIRE(rankZones(40,20,2,499,0,0,false)[0]==Structure_ZoneResidential);
-    REQUIRE(rankZones(40,20,2,0,0,0,false)[0]==NONE_ID);
-    auto ranked=rankZones(40,20,2,499,1500,1500,false);
-    prioritizeResidentialInfill(ranked,499,true);
-    REQUIRE(ranked[0]==Structure_ZoneCommercial);
-    ranked=rankZones(40,20,2,500,1500,1500,false);
-    prioritizeResidentialInfill(ranked,500,true);
-    REQUIRE(ranked[0]==Structure_ZoneResidential);
+TEST_CASE("Zone demand balancing replaces the industry-starving 500 threshold", "[quantbot][city]") {
+    CHECK(rankZones(40,20,2,499,500,1500,false)[0] == Structure_ZoneIndustrial);
+    CHECK(rankZones(40,20,2,499,499,1,false)[0] == Structure_ZoneCommercial);
+    CHECK(rankZones(40,20,2,499,499,0,false)[0] == Structure_ZoneCommercial);
+    CHECK(rankZones(40,20,2,499,0,0,false)[0] == Structure_ZoneResidential);
+    CHECK(rankZones(40,20,2,0,0,0,false)[0] == NONE_ID);
+    // Screenshot: negative R and both job demands high. Existing I shortage wins.
+    CHECK(rankZones(20,10,1,-1110,1360,1500,false)[0] == Structure_ZoneIndustrial);
+    // Committed counts include orders in other construction yards.
+    CHECK(rankZones(20,4,3,-1110,1500,1360,false)[0] == Structure_ZoneIndustrial);
+    CHECK(rankZones(20,4,4,-1110,1500,1360,false)[0] == Structure_ZoneCommercial);
+}
+
+TEST_CASE("Persistent slightly unequal demands fund both jobs sectors", "[quantbot][city]") {
+    int c=10, i=1, builtC=0, builtI=0;
+    for (int n=0;n<40;++n) {
+        const auto selected=rankZones(20,c,i,-1110,1500,1360,false)[0];
+        if (selected==Structure_ZoneCommercial) { ++c; ++builtC; }
+        else if (selected==Structure_ZoneIndustrial) { ++i; ++builtI; }
+        else FAIL("Negative-demand housing was selected");
+    }
+    CHECK(builtC>0);
+    CHECK(builtI>0);
+    CHECK(std::abs(c-i)<=1);
+    // Near-zero demand does not get a plot merely to fill the ratio.
+    CHECK(rankZones(30,30,0,-100,1500,1,false)[0] == Structure_ZoneCommercial);
 }
 
 TEST_CASE("Air gets funds before ground factories without changing city yard precedence", "[quantbot][production][air]") {
@@ -1009,4 +1196,257 @@ TEST_CASE("QuantBot establishes repair support before expanding the opening vehi
     REQUIRE(needsExtraRepairYard(0, 0, 1, 6100));
     REQUIRE(needsExtraRepairYard(1, 0, 4, 8050));
     REQUIRE_FALSE(needsExtraRepairYard(2, 0, 4, 8050)); // Both built/queued slots covered.
+}
+
+TEST_CASE("Opening transport precedes repeated heavy factories and saves for the first carryall", "[quantbot][production][air]") {
+    CHECK(firstTransportNeeded(true,1,3,0));
+    CHECK_FALSE(firstTransportNeeded(false,1,3,0)); // Low tech, disabled transport or air cap.
+    CHECK_FALSE(firstTransportNeeded(true,0,3,0));
+    CHECK_FALSE(firstTransportNeeded(true,1,0,0));
+    CHECK_FALSE(firstTransportNeeded(true,1,3,1)); // Existing or queued carryall releases expansion.
+    CHECK(carryallTarget(0,1)==1); // Old formula rounded early transport to zero.
+    CHECK(carryallTarget(0,0)==0);
+    CHECK(carryallTarget(30000,30)==15);
+    for (bool city : {false,true}) {
+        CHECK(productionPlanningPriority(city,Structure_HighTechFactory,false,true)
+            > productionPlanningPriority(city,Structure_ConstructionYard,true,true));
+        CHECK(productionPlanningPriority(city,Structure_ConstructionYard,false,true)
+            > productionPlanningPriority(city,Structure_HeavyFactory,false,true));
+    }
+    AirProductionState s;
+    s.carryallAvailable=true; s.carryallPrice=800; s.carryallTarget=1;
+    s.ornithopterAvailable=true; s.ornithopterPrice=600; s.canUpgrade=true;
+    s.armyLimit=10000; s.vehiclePlanValue=10000; s.airTargetBps=1000;
+    s.spendable=799;
+    CHECK(chooseAirProduction(s).order==AirOrder::None);
+    CHECK(std::string(chooseAirProduction(s).reason)=="save_first_carryall");
+    s.spendable=800;
+    CHECK(chooseAirProduction(s).order==AirOrder::Carryall);
+    s.carryalls=1;
+    CHECK(chooseAirProduction(s).order==AirOrder::Ornithopter);
+}
+
+TEST_CASE("Busy military factories must not create one refinery per harvester", "[quantbot][city][economy]") {
+    using namespace CityEconomyInvestmentPolicy;
+    // 638 Ordos at 20 minutes: 32 refineries/workers, one R and 47 tax/min.
+    CHECK_FALSE(processingCapacityNeeded(32,32,246,1757));
+    CHECK_FALSE(considerRefinery(false,true,true)); // Busy still means capable of supply.
+    CHECK(taxHedgeNeeded(47,0,32*246));
+    CHECK_FALSE(preferRefinery(Investment{521,246,3,11861,1000,689},
+        Investment{130,23,0,4350,1000},considerRefinery(false,true,true),false));
+    CHECK(considerRefinery(false,true,true,true)); // Recover a workforce below two.
+    CHECK(considerRefinery(false,true,false)); // No heavy factory: opening remains possible.
+    CHECK(considerRefinery(true,false,true)); // Genuine bay backlog still catches up.
+    // Worker target stays independent of refinery count and tax hedge.
+    CHECK(factoryHarvesterTarget(87,120)==87);
+    CHECK(factoryHarvesterTarget(0,120)==0);
+}
+
+TEST_CASE("City income hedge grows with the spice economy and credits pending development", "[quantbot][city][economy]") {
+    using namespace CityEconomyInvestmentPolicy;
+    CHECK(taxHedgeNeeded(30,0,3*320));
+    CHECK(taxHedgeNeeded(300,0,3*320));
+    CHECK_FALSE(taxHedgeNeeded(320,0,3*320));
+    CHECK_FALSE(taxHedgeNeeded(300,20,3*320));
+    CHECK(taxHedgeNeeded(320,20,6*320));
+    CHECK_FALSE(taxHedgeNeeded(30,0,0)); // Depleted fields cannot justify new bays.
+}
+
+TEST_CASE("Refineries catch up to profitable fleet queues even while tax hedge is short", "[quantbot][city][economy]") {
+    using namespace CityEconomyInvestmentPolicy;
+    Investment bay{526,640,4,2000,1000,1500};
+    Investment zone{130,100,0,4350,1000};
+    CHECK(preferRefinery(bay,zone,true,true,true));
+    // One bay processes 1757/min: four 320/min workers fit, six do not.
+    CHECK_FALSE(processingCapacityNeeded(1,4,320,1757));
+    CHECK(processingCapacityNeeded(1,6,320,1757));
+    CHECK_FALSE(processingCapacityNeeded(2,6,320,1757)); // Queued second bay prevents duplicates.
+    bay.confidence=100;
+    CHECK_FALSE(preferRefinery(bay,zone,true,true,true)); // Almost exhausted field cannot repay it.
+}
+
+TEST_CASE("Growing cities save for nuclear before another run of windtraps", "[quantbot][power]") {
+    CHECK_FALSE(planNuclearInvestment(100,200,100,100)); // Opening still uses cheap wind.
+    CHECK(planNuclearInvestment(300,500,125,100)); // Forecast reserve close: begin saving while powered.
+    CHECK(planNuclearInvestment(600,700,250,100));
+    CHECK_FALSE(planNuclearInvestment(600,2500,250,100)); // New reactor covers growth; do not duplicate.
+    CHECK_FALSE(planNuclearInvestment(600,700,250,0));
+    CHECK(spendableCredits(1700,2000)==0); // Existing factories allow the saving to accumulate.
+    CHECK(spendableCredits(2600,2000)==600); // Excess funds can still buy military units.
+}
+
+TEST_CASE("Police budget cuts respond to loss and financial pressure then recover gradually", "[quantbot][city][budget]") {
+    // Ordos at ~50min in638: gross695, police575, plus246 power/min.
+    CHECK(recoveryPoliceFunding(100,695,246,575,500,true)==75);
+    CHECK(recoveryPoliceFunding(75,695,246,575,500,true)==50);
+    CHECK(recoveryPoliceFunding(50,695,246,575,500,true)==50); // Margin has recovered.
+    CHECK(recoveryPoliceFunding(100,695,246,575,500,false)==100); // No major losses.
+    CHECK(recoveryPoliceFunding(100,695,246,575,3000,true)==100); // Healthy cash buffer.
+    CHECK(recoveryPoliceFunding(50,0,250,575,0,true)==25);
+    CHECK(recoveryPoliceFunding(25,0,250,575,0,true)==25); // Keep some crime protection.
+    CHECK(recoveryPoliceFunding(50,1600,250,575,500,true)==75);
+    CHECK(recoveryPoliceFunding(75,1600,250,575,500,false)==100);
+    CHECK(recoveryPoliceFunding(25,695,246,575,5000,false)==50);
+}
+
+TEST_CASE("Air strikes reject protected targets and covered approaches", "[quantbot][air]") {
+    AirStrikePolicy::Coverage coverage(40,40);
+    coverage.add(Coord(20,20),8);
+    CHECK_FALSE(coverage.clearFootprint(Coord(25,20),Coord(2,2)));
+    CHECK_FALSE(coverage.clearFootprint(Coord(28,20),Coord(2,2))); // range boundary
+    CHECK(coverage.clearFootprint(Coord(30,20),Coord(2,2))); // exposed district
+    CHECK(coverage.clearApproach(Coord(35,20),Coord(30,20)));
+    CHECK_FALSE(coverage.clearApproach(Coord(5,20),Coord(30,20))); // target safe, route unsafe
+    CHECK(coverage.clearApproach(Coord(5,5),Coord(30,5)));
+    CHECK_FALSE(coverage.clearFootprint(Coord(-1,5),Coord(2,2)));
+    CHECK_FALSE(coverage.clearApproach(Coord(20,20),Coord(30,20))); // aircraft already under AA
+    // A launcher moving up invalidates a previously safe attack next pass.
+    coverage.add(Coord(33,20),9);
+    CHECK_FALSE(coverage.clearFootprint(Coord(30,20),Coord(2,2)));
+    CHECK_FALSE(coverage.clearApproach(Coord(35,20),Coord(30,20)));
+}
+
+TEST_CASE("Air coverage uses combat diagonal distance and clears with removed defenders", "[quantbot][air]") {
+    AirStrikePolicy::Coverage guarded(40,40);
+    guarded.add(Coord(10,10),8);
+    CHECK_FALSE(guarded.safe(Coord(18,10)));
+    CHECK(guarded.safe(Coord(18,18))); // outside octile range, inside a square approximation
+    AirStrikePolicy::Coverage rebuilt(40,40);
+    CHECK(rebuilt.clearApproach(Coord(0,10),Coord(30,10)));
+    for(int item : {Structure_RocketTurret,Unit_Launcher,Unit_EliteLauncher,Unit_Deviator})
+        CHECK(AirStrikePolicy::antiAir(item));
+    for(int item : {Structure_GunTurret,Structure_Refinery,Unit_Harvester,Unit_SonicTank})
+        CHECK_FALSE(AirStrikePolicy::antiAir(item));
+}
+
+TEST_CASE("Brutal compounds an eight-worker opening while lower difficulties keep four", "[quantbot][city]") {
+    using namespace CityEconomyInvestmentPolicy;
+    for (int workers = 4; workers < 8; ++workers) {
+        CHECK(openingWorkersNeeded(workers,120,true));
+        CHECK(preferFactoryHarvester(workers,120,300,80000,300,true,true,true));
+        CHECK_FALSE(openingWorkersNeeded(workers,120));
+        CHECK_FALSE(preferFactoryHarvester(workers,120,300,80000,300,true,true));
+    }
+    CHECK_FALSE(openingWorkersNeeded(8,120,true));
+    CHECK(preferFactoryHarvester(8,120,2400,80000,300,true,true,true));
+    CHECK_FALSE(preferFactoryHarvester(9,120,2400,80000,300,true,true,true));
+    CHECK(preferFactoryHarvester(40,120,12000,80000,300,true,true,true));
+    for (int target : {0,1,2,5}) {
+        CHECK_FALSE(openingWorkersNeeded(target,target,true));
+        CHECK_FALSE(preferFactoryHarvester(target,target,80000,80000,300,true,true,true));
+    }
+    CHECK_FALSE(preferFactoryHarvester(4,120,1200,80000,300,true,false,true)); // Vanilla unchanged.
+}
+
+TEST_CASE("Brutal can choose a profitable third refinery with a worker-capable factory", "[quantbot][city]") {
+    using namespace CityEconomyInvestmentPolicy;
+    // Observed 645 forecast: refinery rejected solely because a factory exists.
+    Investment refinery{461,375,3,8195,1000,689};
+    Investment zone{109,19,0,4350,1000,53};
+    CHECK_FALSE(considerRefinery(false,true,true));
+    CHECK(openingRefineryInvestment(true,4,120,2));
+    CHECK(preferRefinery(refinery,zone,considerRefinery(false,true,true,
+        openingRefineryInvestment(true,4,120,2)),false));
+    CHECK_FALSE(preferRefinery(refinery,zone,true,true)); // Keep first residential hedge.
+    CHECK_FALSE(openingRefineryInvestment(false,4,120,2));
+    CHECK_FALSE(openingRefineryInvestment(true,8,120,2));
+    CHECK_FALSE(openingRefineryInvestment(true,4,120,3)); // No unlimited spare bays.
+    CHECK_FALSE(openingRefineryInvestment(true,2,2,2));
+    refinery.projectedProceeds=300;
+    CHECK_FALSE(preferRefinery(refinery,zone,true,false)); // Bad/risky trips still lose.
+    CHECK(considerRefinery(true,false,true)); // Mature unloading catchup remains available.
+}
+
+TEST_CASE("Announced civic requirements select a single feasible investment", "[quantbot][city]") {
+    using namespace CityEconomyInvestmentPolicy;
+    using namespace DuneCity;
+    CHECK(demandedCivic(NeedStadium,0,true,0,true)==Structure_Stadium);
+    CHECK(demandedCivic(NeedStadium|NeedAirport,0,true,0,true)==Structure_Stadium);
+    CHECK(demandedCivic(NeedStadium|NeedAirport,1,true,0,true)==Structure_Airport);
+    CHECK(demandedCivic(NeedStadium|NeedAirport,0,false,0,true)==Structure_Airport);
+    CHECK(demandedCivic(NeedStadium,0,false,0,true)==NONE_ID);
+    CHECK(demandedCivic(NeedStadium,1,true,0,true)==NONE_ID);
+    CHECK(demandedCivic(0,0,true,0,true)==NONE_ID); // No premature airports/stadiums.
+    // A 3000-credit stadium can accumulate cash instead of losing it to optional units.
+    CHECK(QuantBotBuildPolicy::spendableCredits(2900,3000)==0);
+    CHECK(QuantBotBuildPolicy::spendableCredits(3400,3000)==400);
+}
+
+TEST_CASE("Persistent unloading queues trigger one extra bay without a fleet forecast", "[quantbot][city]") {
+    using namespace CityEconomyInvestmentPolicy;
+    CHECK(unloadingQueueNeedsBay(3,0,0,true));
+    CHECK(unloadingQueueNeedsBay(4,1,0,true));
+    CHECK_FALSE(unloadingQueueNeedsBay(3,0,0,false)); // Transient arrivals.
+    CHECK_FALSE(unloadingQueueNeedsBay(1,0,0,true));
+    CHECK_FALSE(unloadingQueueNeedsBay(3,3,0,true)); // Free bays can absorb arrivals.
+    CHECK_FALSE(unloadingQueueNeedsBay(8,0,1,true)); // Wait for committed capacity.
+}
+
+#include <players/RockExpansionPolicy.h>
+TEST_CASE("Expansion chooses safe reachable new rock rather than adjacent yards", "[quantbot][expansion]") {
+    using namespace RockExpansionPolicy;
+    constexpr int w=80,h=50;
+    std::vector<Tile> tiles(w*h);
+    for(auto& tile:tiles){tile.walkable=true;tile.free=true;}
+    auto rock=[&](int x0,int y0){for(int y=y0;y<y0+10;++y)for(int x=x0;x<x0+10;++x)tiles[y*w+x].rock=true;};
+    rock(2,20); rock(25,20); rock(60,20);
+    tiles[23*w+5].owned=true; // Current base; plenty of rock but not a new formation.
+    const auto safe=choose(w,h,tiles,{23*w+12},{23*w+0},{});
+    REQUIRE(safe.valid());CHECK(safe.x>=25);CHECK(safe.x<35);CHECK(safe.room>=48);
+    const auto other=choose(w,h,tiles,{23*w+12},{23*w+0},{safe.y*w+safe.x});
+    REQUIRE(other.valid());CHECK(other.x>=60);
+    // No safe ground route across a mountain barrier: do not order an unreachable MCV.
+    for(int y=0;y<h;++y)tiles[y*w+45].walkable=false;
+    const auto reachable=choose(w,h,tiles,{23*w+12},{23*w+0},{});
+    REQUIRE(reachable.valid());CHECK(reachable.x<45);
+    // The remaining rock is in enemy fire; preserve the MCV instead of deploying at home.
+    for(int y=20;y<30;++y)for(int x=25;x<35;++x)tiles[y*w+x].unsafe=true;
+    CHECK_FALSE(choose(w,h,tiles,{23*w+12},{23*w+0},{}).valid());
+}
+
+TEST_CASE("Air raids prefer buildings and only intercept defensive ground contacts", "[quantbot][air]") {
+    CHECK(AirStrikePolicy::targetRank(true,false)>AirStrikePolicy::targetRank(false,true));
+    CHECK(AirStrikePolicy::targetRank(false,false)==0);
+    CHECK(AirStrikePolicy::targetRank(false,true)>0);
+    CHECK(AirStrikePolicy::safetyRange(7)==12);
+}
+TEST_CASE("Air withdrawal exits new coverage without crossing a second defended area", "[quantbot][air]") {
+    AirStrikePolicy::Coverage map(40,40);
+    map.add(Coord(10,20),5);
+    map.add(Coord(25,20),4);
+    CHECK(map.clearWithdrawal(Coord(10,20),Coord(17,20)));
+    CHECK_FALSE(map.clearWithdrawal(Coord(10,20),Coord(35,20)));
+    CHECK_FALSE(map.clearWithdrawal(Coord(5,5),Coord(10,20)));
+    const Coord exit=map.escape(Coord(10,20));
+    CHECK(exit.isValid());
+    CHECK(map.safe(exit));
+    CHECK(map.clearWithdrawal(Coord(10,20),exit));
+    AirStrikePolicy::Coverage trapped(2,2); trapped.add(Coord(0,0),10);
+    CHECK(trapped.escape(Coord(0,0)).isInvalid());
+}
+
+TEST_CASE("MCVs choose nearby usable rock without chasing distant space or clearance", "[quantbot][expansion]") {
+    using namespace RockExpansionPolicy;
+    constexpr int w=100,h=50;
+    std::vector<Tile> tiles(w*h);
+    for(auto& tile:tiles){tile.walkable=true;tile.free=true;}
+    auto rock=[&](int x0,int y0,int size){for(int y=y0;y<y0+size;++y)for(int x=x0;x<x0+size;++x)tiles[y*w+x].rock=true;};
+    rock(2,20,8); tiles[22*w+4].owned=true;
+    rock(20,20,8); rock(65,15,20);
+    // With no enemies, a much larger island must not outrank nearby usable rock.
+    auto result=choose(w,h,tiles,{23*w+10},{},{});
+    REQUIRE(result.valid());CHECK(result.x>=20);CHECK(result.x<28);
+    // Same result when the far island offers needless extra enemy clearance.
+    result=choose(w,h,tiles,{23*w+10},{23*w},{});
+    REQUIRE(result.valid());CHECK(result.x>=20);CHECK(result.x<28);
+    // Nearby rock under direct threat is still rejected.
+    result=choose(w,h,tiles,{23*w+10},{23*w+22},{});
+    REQUIRE(result.valid());CHECK(result.x>=65);
+    // Main-base proximity beats safety/space rewards and the MCV's own position.
+    const Site near{20,20,64,12,70,20}, safer{25,20,64,24,10,25}, distant{70,20,196,70,5,65};
+    CHECK(betterSite(near,safer));CHECK(betterSite(near,distant));
+    CHECK(betterSite(Site{20,20,64,24,70,20},near)); // safety only breaks a distance tie
+    result=choose(w,h,tiles,{23*w+90},{},{},22*w+4);
+    REQUIRE(result.valid());CHECK(result.x>=20);CHECK(result.x<28); // MCV beside far island
+
 }

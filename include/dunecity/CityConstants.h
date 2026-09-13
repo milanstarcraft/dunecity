@@ -50,10 +50,11 @@ inline bool isCityOnlyStructure(int itemID) {
         || itemID == Structure_Airport;
 }
 
-// Roads are shared construction access in city mode. Ownership still controls
-// maintenance accounting; enemy bare ground/concrete does not grant build reach.
-inline bool isConstructionAnchor(bool cityMode, bool road, int tileOwner, int builderHouse) {
-    return tileOwner == builderHouse || (cityMode && road);
+// Construction reach follows owned tiles, regardless of their foundation.
+// Enemy roads, like enemy concrete, may be covered inside our normal build
+// range but never grant a foothold or extend that range themselves.
+inline bool isConstructionAnchor(int tileOwner, int builderHouse) {
+    return tileOwner == builderHouse;
 }
 
 inline bool isCityBuildableTerrain(uint32_t terrain) {
@@ -69,12 +70,10 @@ inline bool isCityZoneTerrain(uint32_t terrain) {
         || terrain == Terrain_Sand || terrain == Terrain_Dunes;
 }
 
-inline int getCityBuildTime(int itemID, int configuredBuildTime,
-                            int concreteBuildTime, int policeBuildTime) {
-    // Road and R/C/I zoning are planning tools, not construction projects.
-    // The builder needs one simulation step to process the order, after
-    // which the tile/lot is placed immediately.
-    if (itemID == Structure_Road || isCityZoneStructure(itemID)) return 1;
+inline int getCityBuildTime(int itemID, int configuredBuildTime) {
+    // Only roads bypass normal construction timing. Zones use their configured
+    // duration like other buildings, respecting active house/mod data.
+    if (itemID == Structure_Road) return 1;
     return std::max(1, configuredBuildTime);
 }
 
