@@ -3,9 +3,34 @@
 History of changes made in this fork (`milanstarcraft/dunecity`), newest first.
 Upstream's own history lives in `ChangeLog`, `NEWS` and `release_notes/`.
 
-Written by "do M" — see `FORK-SETUP.md` §4.
+Written by "do M" — see `CLAUDE.md` §3.
 
 ---
+
+## 2026-09-13 20:36 Belgrade — on upstream 1.0.682
+
+**Synced to upstream 1.0.682 and documented four things learned doing it.**
+
+- Merged 210 upstream commits, `1.0.630 → 1.0.682`. **Zero conflicts.** The `merge=ours`
+  protection was not even needed this time — upstream touched none of this fork's files, and
+  none of the stale build folders deleted earlier.
+- Upstream moved from `VR48/dunecity` to `ggtothemax/dunecity` (Stefan van der Wel) around
+  2026-09-12. VR48 remains a maintainer, old URLs still redirect. The `upstream` remote now
+  points at the new address; its push URL stays disabled.
+- `CLAUDE.md` §4 — upstream's version rules: three files must agree, the bump belongs in the
+  same commit as the work, and `scripts/bump-version.sh` is the only way to change them.
+- `CLAUDE.md` §4 — `python3` did not exist on this machine, so their script failed with
+  "Python was not found". Fixed by copying `python.exe` to `python3.exe` in the Python310
+  folder, which sits earlier in PATH than the Microsoft Store alias stub. Upstream's script
+  was deliberately **not** patched: editing an upstream file guarantees a merge conflict.
+- `CLAUDE.md` §7 — contributing back: Discord, Issues and PRs, and the hard rule that a PR
+  must come from a fresh `contrib/` branch off `main`, never from `my-dev`.
+- `CLAUDE.md` §2 — build the `dunecity` target for testing, not `installer`. Measured on this
+  machine with nothing changed: **24 s versus 86 s**. Also noted that a slow build is usually
+  a post-merge recompile or vcpkg rebuilding dependencies, not the target choice — the
+  1.0.682 configure took 24 minutes because upstream added OpenSSL 3.6 and libcurl 8.17 for
+  crossplay.
+- Rebuilt at 1.0.682: zero errors, 5,666 warnings, installer 29 MB.
 
 ## 2026-09-10 21:17 Belgrade — on upstream 1.0.630
 

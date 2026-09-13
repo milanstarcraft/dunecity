@@ -63,14 +63,51 @@ ninja: error: 'SDL2::SDL2-NOTFOUND', needed by 'SDL2_mixerd.dll'
 Hence `-DVCPKG_INSTALLED_DIR=C:/vcpkg-installed/dunecity` on every configure. The build
 folder itself may contain brackets; the vcpkg install dir may not.
 
+### Build the right target — this is the difference between 24 seconds and many minutes
+
+Measured on this machine, 2026-09-13, nothing changed between the two runs:
+
+| target | use it for | no-op cost |
+|---|---|---|
+| `dunecity` | **everyday testing** — this is the game | **24 s** |
+| `installer` | producing a setup file for other people | **86 s** |
+
+To test a change, build `dunecity` and run the binary directly:
+
+```
+cmake --build <build folder> --target dunecity --config Release
+<build folder>\bin\Release\dunecity.exe
+```
+
+`installer` additionally **deletes** the whole `install\` folder, re-copies everything into it
+(including 340 MB of HD mod graphics), and runs NSIS compression — at full cost even when
+nothing changed. That is the extra ~62 seconds, and none of it helps test a code change.
+
+Note what this does **not** explain: a slow build is usually a full recompile after an
+upstream merge, or vcpkg rebuilding dependencies. Check those before blaming the target.
+
+`BUILD.md` shouts "DO NOT just run `cmake --build build`" and demands the installer target.
+That advice is written for people cutting releases, which is upstream's job, not this fork's.
+Ignore it for local work.
+
+**Close the game before building.** Windows will not delete a folder containing a running
+`.exe`, so `installer` fails at its first step with `Error removing directory .../install`.
+Check with `Get-Process dunecity` before assuming a lock is Dropbox.
+
 ### What a healthy build looks like
 
-- Cold vcpkg cache: configure takes ~8 minutes. Warm: ~1.5 minutes.
-- The C++ compiles with **zero errors and roughly 5,000 warnings** on MSVC 2026. That is
-  normal for this codebase on a newer compiler. **Do not "fix" the warnings as a side quest.**
-- `--target installer` produces `DuneCity-<version>-Windows-x64.exe` in the build folder root,
-  and the game at `bin\Release\dunecity.exe`. NSIS must be installed.
-  `WINDOWS_QUICKSTART.md` claims CMake installs NSIS automatically — it does not.
+- Warm vcpkg cache: configure ~1.5 minutes. Cold, or after upstream adds a dependency: 8–25
+  minutes. (1.0.682 added OpenSSL 3.6 and libcurl 8.17 for crossplay — that configure took 24
+  minutes and is now cached.)
+- A full compile after a large upstream merge takes ~10 minutes. Everyday incremental builds
+  do not.
+- The C++ compiles with **zero errors and 5,000–6,000 warnings** on MSVC 2026. That is normal
+  for this codebase on a newer compiler. **Do not "fix" the warnings as a side quest.**
+- `--target installer` produces `DuneCity-<version>-Windows-x64.exe` in the build folder root.
+  NSIS must be installed. `WINDOWS_QUICKSTART.md` claims CMake installs NSIS automatically —
+  it does not.
+- CMake 4.x prints a `CMP0177` policy warning from upstream's `install()` calls. Upstream's to
+  fix, harmless here.
 
 Upstream's `AGENTS.md` and `WINDOWS_QUICKSTART.md` describe other machines (macOS/Homebrew,
 "no vcpkg", `~/development/dunecity`). Ignore their build instructions. Use this section.
@@ -130,13 +167,59 @@ tradeoff first.
 Deeper background: `ARCHITECTURE.md`, `docs/dunecity-current-architecture.md`, and
 `analysis/` (historical, may be stale).
 
-### Versioning
+### Versioning — upstream's rules
 
-The app version lives in three files — `CMakeLists.txt`, `include/config.h`, `vcpkg.json` —
-kept in sync by `scripts/bump-version.sh`. Never hand-edit them separately.
+The app version lives in **three files that must always agree**:
 
-This fork does not publish releases, so upstream's tagging and CI rules do not apply here.
-The version is only a marker of which upstream code this fork sits on.
+| file | line |
+|---|---|
+| `CMakeLists.txt` | `project(DuneCity VERSION 1.0.682 ...)` |
+| `include/config.h` | `#define VERSION "1.0.682"` |
+| `vcpkg.json` | `"version": "1.0.682"` |
+
+`scripts/bump-version.sh` is the single source of truth for changing them:
+
+```bash
+scripts/bump-version.sh 1.0.683            # set all three
+scripts/bump-version.sh --check            # verify they agree
+scripts/bump-version.sh 1.0.683 --dry-run  # preview
+```
+
+**Never hand-edit the three files separately.** Upstream's own README shows `sed` commands
+doing exactly that, followed by `--check`. Use the script instead — it does the same job
+without the chance of missing one.
+
+Upstream's rule: **the version bump belongs in the same commit as the work**, never a
+follow-up commit. A tag `vX.Y.Z` must find the source already at `X.Y.Z`. Their CI verifies
+this and will not bump for you.
+
+Generated outputs (`build/include/config.h`, app bundle `Info.plist`) are derived at build
+time and are not the source of truth.
+
+**`python3` on Windows — fixed, but know why.** The script calls `python3`, which Windows
+installers never create; the name resolves to a Microsoft Store alias stub that fails with
+"Python was not found". Fixed on 2026-09-13 by copying `python.exe` to `python3.exe` in
+`%LOCALAPPDATA%\Programs\Python\Python310\`, which sits earlier in PATH than the stub. The
+script now reports `OK - all files agree`.
+
+Do **not** edit upstream's script to work around this — editing an upstream file guarantees
+a merge conflict later. Fix the environment, not their code.
+
+If `python3` ever breaks again (new machine, Python reinstall), either redo that copy or
+check the three files directly:
+
+```bash
+grep -m1 'project(DuneCity VERSION' CMakeLists.txt
+grep -m1 'define VERSION' include/config.h
+grep -m1 '"version"' vcpkg.json
+```
+
+The sprite pipeline (`scripts/import-sprites.py`, `scripts/make-tornie-pak.py`) needs Python
+too. `py` gives 3.13.5 if a newer interpreter is wanted than the 3.10.11 behind `python3`.
+
+**In this fork**, none of the release machinery applies — this fork publishes nothing, has no
+CI, and must never push tags. The version here is only a marker of which upstream code the
+fork sits on. Record it in `FORK-CHANGELOG.md` entries; do not bump it for local work.
 
 ## 5. Working agreements
 
@@ -156,16 +239,24 @@ The version is only a marker of which upstream code this fork sits on.
   `/*-REVIEW.md`. Anything worth keeping goes into `FORK-CHANGELOG.md` or `docs/`.
 - **Do not hand-edit generated or imported assets** unless the task is about the asset pipeline.
 
-## 6. Upstream: merging is optional and rare
+## 6. Upstream: syncing
 
-The owner does not routinely pull upstream changes. This fork has diverged on purpose.
+Upstream is `ggtothemax/dunecity` (Stefan van der Wel). The project was transferred there
+from `VR48/dunecity` around 2026-09-12; VR48 remains a maintainer. Old URLs still redirect.
 
-If a merge is ever requested:
+Upstream ships releases most days — 210 commits in the three days after this fork was made.
+Keep `main` as a pure mirror and merge it into `my-dev`:
 
 ```bash
 git fetch upstream
-git merge upstream/main
+git switch main
+git merge --ff-only upstream/main
+git switch my-dev
+git merge main
 ```
+
+`--ff-only` on `main` is deliberate: if it refuses to fast-forward, something was committed
+to `main` by mistake, and that must be investigated rather than merged over.
 
 `.gitattributes` marks `CLAUDE.md`, `AGENTS.md` and `FORK-CHANGELOG.md` as `merge=ours`, so
 this fork's versions survive untouched and produce no conflicts.
@@ -180,3 +271,44 @@ git config merge.ours.driver true
 Verify with `git check-attr merge CLAUDE.md` — it must report `merge: ours`.
 
 Everything else merges normally, so expect conflicts in source files this fork has touched.
+
+## 7. Contributing back to upstream
+
+Upstream accepts outside pull requests — merged PRs exist from contributors outside the core
+team. Channels, best first:
+
+| channel | for |
+|---|---|
+| Discord — `https://discord.com/invite/6sAcZr6y3B` | saying hello, asking what needs doing |
+| GitHub Issues on `ggtothemax/dunecity` | concrete bugs and proposals |
+| Pull request | the actual contribution |
+
+There is no `CONTRIBUTING.md`. The **"Development Workflow"** section of upstream's
+`README.md` is the closest thing, and it is the file to re-read before a first PR.
+
+### The hard rule: never open a PR from `my-dev`
+
+`my-dev` carries this fork's private work — `CLAUDE.md`, `AGENTS.md`, `FORK-CHANGELOG.md`,
+`.gitattributes` merge rules, and the deletion of upstream's stale `build.bad/`, `build2/`,
+`build_phase4/`, `buildtests/` folders. A PR from that branch would bury the real change
+under noise and would be rejected on sight.
+
+Every contribution starts from a **fresh branch off `main`**, which mirrors upstream exactly:
+
+```bash
+git fetch upstream
+git switch main
+git merge --ff-only upstream/main
+git switch -c contrib/<short-name> main
+```
+
+Work there, commit only the files the change needs, then `git push -u origin contrib/<name>`
+and open the PR on GitHub against `ggtothemax/dunecity`. Never merge `my-dev` into a
+`contrib/` branch, and never merge a `contrib/` branch into `main`.
+
+### Open question: do contributors bump the version?
+
+Upstream's rule says a version bump belongs in the same commit as the work. That rule is
+written for maintainers pushing to `main`. For an outside PR it is ambiguous, and bumping
+would collide with every other open PR. **Ask on Discord or in the PR description rather
+than guessing.** Default to not bumping, and say so in the PR.
