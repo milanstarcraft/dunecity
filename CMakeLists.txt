@@ -1,7 +1,10 @@
 cmake_minimum_required(VERSION 3.15)
 
 # Project name and version
-project(DuneCity VERSION 1.0.682 LANGUAGES C CXX)
+project(DuneCity VERSION 1.0.760 LANGUAGES C CXX)
+if(APPLE)
+    enable_language(OBJCXX)
+endif()
 
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 17)
@@ -68,6 +71,7 @@ if(NOT EMSCRIPTEN)
     find_package(SDL2_mixer CONFIG REQUIRED)
     find_package(SDL2_ttf CONFIG REQUIRED)
     find_package(CURL REQUIRED)
+    find_package(ZLIB REQUIRED)
 endif()
 
 if(EMSCRIPTEN)
@@ -202,6 +206,19 @@ else()
     add_compile_options(-Wno-expansion-to-defined)  # Silences "define FMT_HAS_FEATURE(x) __has_feature(x) may not be portable" warnings.
 endif()
 
+# The p2pkit Emscripten SDK (C++ headers under emscripten/include/p2pkit-wasm/
+# and the --js-library glue under emscripten/js/) is a real dependency,
+# installed from the pinned git revision in platform/web/package.json. The
+# packet streams, the WebRTC transport (src) and the packet tests (tests)
+# consume it; nothing SDK-owned is copied into our tree.
+set(DUNECITY_P2PKIT_DIR "${CMAKE_SOURCE_DIR}/platform/web/node_modules/p2pkit")
+if(NOT EXISTS "${DUNECITY_P2PKIT_DIR}/emscripten/include/p2pkit-wasm/packet.h")
+    message(FATAL_ERROR
+        "p2pkit SDK not installed: ${DUNECITY_P2PKIT_DIR}/emscripten/include/p2pkit-wasm/ is missing. "
+        "Run: npm install  (in platform/web)  to install the p2pkit revision pinned in "
+        "platform/web/package.json, then reconfigure.")
+endif()
+
 # Add subdirectories
 add_subdirectory(src)
 if(DUNECITY_BUILD_TESTS)
@@ -285,10 +302,16 @@ if(UNIX AND NOT APPLE)
     )
 endif()
 
+# Install the file itself: README is a source-tree symlink to README.md.
+# Copying that link alone leaves Windows/Linux packages with a missing target.
+if(NOT APPLE)
+    install(FILES README.md DESTINATION ${DUNECITY_DOC_DIR} RENAME README)
+endif()
+
 # Install documentation
 if(WIN32)
     # Windows: install docs to root
-    install(FILES AUTHORS COPYING NEWS README
+    install(FILES AUTHORS COPYING NEWS
         DESTINATION ${DUNECITY_DOC_DIR}
     )
     # Install release notes
@@ -298,7 +321,7 @@ if(WIN32)
     )
 elseif(NOT APPLE)
     # Linux: use standard doc directory
-    install(FILES AUTHORS COPYING NEWS README
+    install(FILES AUTHORS COPYING NEWS
         DESTINATION ${DUNECITY_DOC_DIR}
     )
     install(FILES "release_notes/RELEASE_NOTES.md"
@@ -309,56 +332,18 @@ elseif(NOT APPLE)
 endif()
 
 # CPack configuration for packaging
+set(CPACK_VERBATIM_VARIABLES ON)
 set(CPACK_PACKAGE_NAME ${PROJECT_NAME})
 set(CPACK_PACKAGE_VENDOR "Dune City Team")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY ${PROJECT_DESCRIPTION})
 set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
 set(CPACK_PACKAGE_HOMEPAGE_URL ${PROJECT_HOMEPAGE_URL})
 set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/COPYING")
-set(CPACK_RESOURCE_FILE_README "${CMAKE_CURRENT_SOURCE_DIR}/README")
+set(CPACK_RESOURCE_FILE_README "${CMAKE_CURRENT_SOURCE_DIR}/README.md")
 
 if(WIN32)
-    set(CPACK_GENERATOR "NSIS;ZIP")
-    set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
-    set(CPACK_NSIS_MODIFY_PATH OFF)
-    set(CPACK_NSIS_MUI_ICON "${CMAKE_CURRENT_SOURCE_DIR}/dunecity.ico")
-    set(CPACK_NSIS_MUI_UNIICON "${CMAKE_CURRENT_SOURCE_DIR}/dunecity.ico")
-    set(CPACK_NSIS_INSTALLED_ICON_NAME "dunecity.exe")
-    set(CPACK_NSIS_DISPLAY_NAME "Dune City")
-    set(CPACK_NSIS_PACKAGE_NAME "Dune City")
-    set(CPACK_PACKAGE_INSTALL_DIRECTORY "DuneCity")
-    set(CPACK_PACKAGE_FILE_NAME "DuneCity-${PROJECT_VERSION}-Windows-x64")
-    set(CPACK_NSIS_EXECUTABLES_DIRECTORY ".")
-    set(CPACK_NSIS_MUI_FINISHPAGE_RUN "dunecity.exe")
-    
-    # Add checkbox to view release notes on finish page
-    set(CPACK_NSIS_EXTRA_INSTALL_COMMANDS "
-        WriteRegStr HKLM \\\"Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\App Paths\\\\dunecity.exe\\\" \\\"\\\" \\\"$INSTDIR\\\\dunecity.exe\\\"
-        WriteRegStr HKLM \\\"Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\App Paths\\\\dunecity.exe\\\" \\\"Path\\\" \\\"$INSTDIR\\\"
-    ")
-    set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS "
-        DeleteRegKey HKLM \\\"Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\App Paths\\\\dunecity.exe\\\"
-    ")
-    
-    # Custom NSIS code for release notes checkbox on finish page
-    set(CPACK_NSIS_DEFINES "
-        !define MUI_FINISHPAGE_SHOWREADME \\\"$INSTDIR\\\\Release_Notes.md\\\"
-        !define MUI_FINISHPAGE_SHOWREADME_TEXT \\\"View Release Notes\\\"
-        !define MUI_FINISHPAGE_SHOWREADME_NOTCHECKED
-    ")
-    
-    # Create Start Menu shortcuts
-    set(CPACK_NSIS_CREATE_ICONS_EXTRA "
-        CreateShortCut \\\"$SMPROGRAMS\\\\$STARTMENU_FOLDER\\\\Dune City.lnk\\\" \\\"$INSTDIR\\\\dunecity.exe\\\"
-        CreateShortCut \\\"$SMPROGRAMS\\\\$STARTMENU_FOLDER\\\\Release Notes.lnk\\\" \\\"$INSTDIR\\\\Release_Notes.md\\\"
-        CreateShortCut \\\"$SMPROGRAMS\\\\$STARTMENU_FOLDER\\\\Readme.lnk\\\" \\\"$INSTDIR\\\\README\\\"
-    ")
-    set(CPACK_NSIS_DELETE_ICONS_EXTRA "
-        Delete \\\"$SMPROGRAMS\\\\$MUI_TEMP\\\\Dune City.lnk\\\"
-        Delete \\\"$SMPROGRAMS\\\\$MUI_TEMP\\\\Release Notes.lnk\\\"
-        Delete \\\"$SMPROGRAMS\\\\$MUI_TEMP\\\\Readme.lnk\\\"
-    ")
-    
+    include(cmake/WindowsInstaller.cmake)
+
     # Add custom target for Windows installer
     add_custom_target(installer
         COMMAND ${CMAKE_COMMAND} -E echo "Cleaning CPack cache and install directory..."
@@ -384,7 +369,7 @@ elseif(APPLE)
     set(MACOSX_BUNDLE_ICON_FILE "dunecity.icns")
     
     # Install README and release notes to DMG root (not inside .app)
-    install(FILES README DESTINATION . COMPONENT Runtime)
+    install(FILES README.md DESTINATION . RENAME README COMPONENT Runtime)
     install(FILES "release_notes/RELEASE_NOTES.md" 
             DESTINATION . 
             RENAME "Release Notes.md"

@@ -51,11 +51,13 @@ public:
         RoomRelay::Role role    = RoomRelay::Role::Unknown;
         std::string     name;
         std::string     runtime;        ///< client-reported, never trusted for anything
+        bool spectator = false;        ///< authenticated admission role, never client-reported
 
         // Config verification state, mirroring what the ENet path keeps per connection.
         std::string     gameVersion;
         std::string     quantBotConfigHash;
         std::string     objectDataHash;
+        std::string modRevisionHash;
 
         // Abuse accounting for messages this peer sent that the client itself refused.
         Uint32          refusedMessages = 0;
@@ -87,6 +89,7 @@ public:
         };
 
         Type              type              = Type::Closed;
+        bool              spectator         = false;
         std::uint32_t     peerId            = 0;
         std::string       name;
         std::string       runtime;

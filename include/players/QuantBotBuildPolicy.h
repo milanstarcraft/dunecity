@@ -6,6 +6,7 @@
 #include <Definitions.h>
 #include <algorithm>
 #include <array>
+#include <limits>
 
 namespace QuantBotBuildPolicy {
 
@@ -138,6 +139,23 @@ inline int palaceTarget(bool onlyOnePalace, bool citySim, int displayedPopulatio
     return onlyOnePalace || !citySim ? 1 : 1 + std::max(0, displayedPopulation) / 30000;
 }
 
+// Per-difficulty ceiling on how many palaces a bot may own or have queued.
+// Easy and Medium bots stay below the city-population target; Hard, Brutal and
+// the defensive difficulty keep whatever the scenario already allows. The value
+// is only ever an extra ceiling: callers take the minimum of this and the
+// existing target, so the single-palace option, scenario and campaign build
+// restrictions stay in force and human players are unaffected.
+inline int difficultyPalaceCap(int difficulty) {
+    if (difficulty == 0) return 1; // Easy
+    if (difficulty == 1) return 3; // Medium
+    return std::numeric_limits<int>::max();
+}
+
+inline int palaceTarget(bool onlyOnePalace, bool citySim, int displayedPopulation, int difficulty) {
+    return std::min(palaceTarget(onlyOnePalace, citySim, displayedPopulation),
+                    difficultyPalaceCap(difficulty));
+}
+
 inline int spendableCredits(int credits, int strategicCost) {
     return std::max(0, credits - std::max(0, strategicCost));
 }
@@ -152,8 +170,18 @@ inline int productionPlanningPriority(bool city, Uint32 item, bool waitingToPlac
     return -1;
 }
 
-inline int carryallTarget(int militaryValue, int workers) {
-    return std::max(workers > 0 ? 1 : 0, (militaryValue + workers * 500) / 3000);
+inline int carryallTarget(int workers, int combatVehicles, int repairYards) {
+    // Harvest transport plus repair transport. Infantry, air and the price of a
+    // vehicle do not increase the number of trips. No repair bays, no repair lifts.
+    return (std::max(0,workers)+4)/5
+        + std::min((std::max(0,combatVehicles)+19)/20,2*std::max(0,repairYards));
+}
+inline int supportQueueTarget(int baseline, int actual, int committed, int busy, int waiting) {
+    // Expand a saturated service one delivery at a time. A pending supplier or
+    // idle existing supplier must get a chance to clear the queue first.
+    if (actual>0 && committed==actual && busy>=actual && waiting>=2)
+        return std::max(baseline,actual+1);
+    return baseline;
 }
 inline bool firstTransportNeeded(bool available, int heavyFactories, int workers, int carryalls) {
     return available && heavyFactories > 0 && workers > 0 && carryalls == 0;
@@ -418,26 +446,9 @@ inline bool isLightRaiderPreferredTarget(Uint32 item) {
         || item == Unit_Troopers;
 }
 
-inline int repairYardCap(int heavyFactories) {
-    // Repair is support capacity: at most one yard per two heavy factories.
-    return std::clamp((heavyFactories + 1) / 2, 1, 4);
-}
-
-// Anticipate repair needs as vehicle production scales instead of waiting for
-// every bay to be occupied on the same planning tick. Existing cap still bounds it.
-inline int baselineRepairYards(int heavyFactories, int militaryValue) {
-    if (heavyFactories <= 0) return 0;
-    return std::min(repairYardCap(heavyFactories),
-        1 + std::max(0, militaryValue - 1) / 8000);
-}
-
-inline bool needsExtraRepairYard(int yardsIncludingQueued, int busyYards,
-                                int heavyFactories, int militaryValue) {
-    // Queued yards count towards both the baseline and load-triggered expansion.
-    return yardsIncludingQueued < baselineRepairYards(heavyFactories, militaryValue)
-        || (yardsIncludingQueued > 0 && busyYards >= yardsIncludingQueued
-            && yardsIncludingQueued < repairYardCap(heavyFactories)
-            && militaryValue > yardsIncludingQueued * 6000);
+inline int baselineRepairYards(int combatVehicles, int workers) {
+    // A Starport army needs repairs even without multiple heavy factories.
+    return std::max(workers>0 ? 1 : 0,(std::max(0,combatVehicles)+24)/25);
 }
 
 } // namespace QuantBotBuildPolicy

@@ -53,6 +53,8 @@ static_assert(warningWormSignMaskForHouse(HOUSE_CUSTOM) != 0,
 Sandworm::Sandworm(House* newOwner) : GroundUnit(newOwner) {
 
     Sandworm::init();
+    // New worms default to ambush; loaded worms retain their saved orders.
+    doSetAttackMode(AMBUSH);
 
     setHealth(getMaxHealth());
 
@@ -85,7 +87,7 @@ Sandworm::Sandworm(InputStream& stream) : GroundUnit(stream) {
 
 void Sandworm::init() {
     itemID = Unit_Sandworm;
-    owner->incrementUnits(itemID);
+    registerUnit();
 
     numWeapons = 0;
 
@@ -97,8 +99,7 @@ void Sandworm::init() {
 
     drawnFrame = INVALID;
     
-    // Set to AMBUSH mode to limit pursuit range to view range
-    doSetAttackMode(AMBUSH);
+
 }
 
 Sandworm::~Sandworm() = default;
@@ -450,6 +451,9 @@ bool Sandworm::update() {
 
 bool Sandworm::canAttack(const ObjectBase* object) const {
     if((object != nullptr)
+        // Sleeping/withdrawn worms can still be referenced by AI threat checks but
+        // have no map tile. Check our own position before comparing sand regions.
+        && currentGameMap->tileExists(location)
         && object->isAGroundUnit()
         && (object->getItemID() != Unit_Sandworm)   //wont kill other sandworms
         //&& object->isVisible(getOwner()->getTeamID())

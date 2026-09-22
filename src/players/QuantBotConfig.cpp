@@ -71,8 +71,8 @@ QuantBotConfig::QuantBotConfig() {
     easy.harvesterLimitCustomHugeMap = 15;
     easy.militaryValueLimitCustomSmallMap = 3000;
     easy.militaryValueLimitCustomMediumMap = 8000;
-    easy.militaryValueLimitCustomLargeMap = 20000;
-    easy.militaryValueLimitCustomHugeMap = 30000;
+    easy.militaryValueLimitCustomLargeMap = 15000;
+    easy.militaryValueLimitCustomHugeMap = 25000;
     easy.structureDefenders = 10;
     easy.harvesterDefenders = 5;
     
@@ -91,8 +91,8 @@ QuantBotConfig::QuantBotConfig() {
     medium.harvesterLimitCustomHugeMap = 25;
     medium.militaryValueLimitCustomSmallMap = 5000;
     medium.militaryValueLimitCustomMediumMap = 12000;
-    medium.militaryValueLimitCustomLargeMap = 35000;
-    medium.militaryValueLimitCustomHugeMap = 50000;
+    medium.militaryValueLimitCustomLargeMap = 25000;
+    medium.militaryValueLimitCustomHugeMap = 40000;
     medium.structureDefenders = 15;
     medium.harvesterDefenders = 10;
     
@@ -118,12 +118,12 @@ QuantBotConfig::QuantBotConfig() {
     
     // === BRUTAL DIFFICULTY ===
     brutal.attackEnabled = true;
-    brutal.attackThresholdPercent = 0.30f;                  // 30% - aggressive (same as Hard)
+    brutal.attackThresholdPercent = 0.25f;                  // 25% of its military ceiling
     brutal.ornithopterAttackEnabled = true;
     brutal.ornithopterAttackThreshold = 3;                  // Attack as soon as 3 ornithopters are ready
     brutal.attackForceMilitaryValueRatio = 0.60f;           // 60% of military value per attack (massive attacks)
     brutal.harvesterLimitPerRefineryMultiplier = 3;         // Campaign: 3 harvesters per refinery
-    brutal.militaryValueMultiplier = 3.0f;                  // Campaign: 3.0x initial military
+    brutal.militaryValueMultiplier = 4.0f;                  // Campaign: 4.0x initial military
     brutal.refineryMinimum = 2;                             // Campaign: Guaranteed 2 refineries (tops up if needed)
     brutal.harvesterLimitCustomSmallMap = 6;
     brutal.harvesterLimitCustomMediumMap = 10;

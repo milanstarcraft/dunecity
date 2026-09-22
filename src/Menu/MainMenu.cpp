@@ -43,6 +43,7 @@
 #include <misc/fnkdat.h>
 #include <mod/ModManager.h>
 #include <mod/ModInfo.h>
+#include <mod/Workshop.h>
 #include <config.h>
 
 #include <cstdio>
@@ -80,38 +81,61 @@ void writeFirstLaunchMarker() {
 
 class ModesMenu final : public MenuBase {
 public:
-    ModesMenu() {
+    explicit ModesMenu(bool workshop = false) {
         setBackground(pGFXManager->getUIGraphic(UI_MenuBackground));
         resize(getTextureSize(pGFXManager->getUIGraphic(UI_MenuBackground)));
         setWindowWidget(&content);
-        title.setText(_("Extras"));
+        title.setText(workshop ? _("Workshop") : _("Extras"));
         title.setTextFontSize(22);
         title.setAlignment(Alignment_HCenter);
-        const int x = (getSize().x-320)/2;
-        const int top = (getSize().y-340)/2;
-        content.addWidget(&title, Point(x,top), Point(320,36));
-        const char* labels[] = {"Mods", "Map Editor", "Asset Editors", "Replays", "How to Play", "About & Credits", "Back"};
-        for(int i=0; i<7; ++i) {
-            buttons[i].setText(_(labels[i]));
-            content.addWidget(&buttons[i], Point(x,top+48+i*40), Point(320,32));
+        const int width = std::min(560, getSize().x - 48);
+        const int x = (getSize().x - width) / 2;
+        const int top = std::max(20, (getSize().y - (workshop ? 400 : 280)) / 2);
+        content.addWidget(&title, Point(x, top), Point(width, 36));
+        const char* workshopLabels[] = {"Map Editor", "Mod Editor", "Asset Editors", "Community Maps & Mods", "Back"};
+        const char* extraLabels[] = {"Replays", "How to Play", "About & Credits", "Back"};
+        const char* descriptions[] = {
+            "Create and edit maps using your chosen mod.",
+            "Create mods and change units, buildings, rules and AI.",
+            "Preview Dune2R sprites and choose animation settings.",
+            "Browse, download and share maps and mods with other players."
+        };
+        const int count = workshop ? 5 : 4;
+        for(int i = 0; i < count; ++i) {
+            buttons[i].setText(_(workshop ? workshopLabels[i] : extraLabels[i]));
+            const int y = top + 48 + i * (workshop ? 69 : 48);
+            content.addWidget(&buttons[i], Point(x, y), Point(width, 32));
+            if(workshop && i < 4) {
+                descriptionsLabels[i].setText(_(descriptions[i]));
+                descriptionsLabels[i].setTextFontSize(12);
+                descriptionsLabels[i].setAlignment(Alignment_HCenter);
+                content.addWidget(&descriptionsLabels[i], Point(x, y + 34), Point(width, 28));
+            }
         }
-        buttons[0].setOnClick([]() { ModMenu().showMenu(); });
-        buttons[1].setOnClick([]() { MapEditor().RunEditor(); });
-        buttons[2].setOnClick([this]() {
-            if(ModManager::instance().getActiveModName() == "Dune2R") Dune2REditorMenu().showMenu();
-            else openWindow(MsgBox::create(_("Choose Dune2R in Mods to use its asset editors.")));
-        });
-        buttons[3].setOnClick([]() { showGameLibrary(true); });
-        buttons[4].setOnClick([]() { HowToPlayMenu().showMenu(); });
-        buttons[5].setOnClick([]() { AboutMenu().showMenu(); });
-        buttons[6].setOnClick([this]() { quit(); });
+        if(workshop) {
+            buttons[0].setOnClick([]() { ModMenu(ModMenu::Purpose::MapEditor).showMenu(); });
+            buttons[1].setOnClick([]() { ModMenu().showMenu(); });
+            buttons[2].setOnClick([]() { ModMenu(ModMenu::Purpose::AssetEditors).showMenu(); });
+            buttons[3].setOnClick([]() { Workshop::openCommunityMenu(); });
+        } else {
+            buttons[0].setOnClick([]() { showGameLibrary(true); });
+            buttons[1].setOnClick([]() { HowToPlayMenu().showMenu(); });
+            buttons[2].setOnClick([]() { AboutMenu().showMenu(); });
+        }
+        buttons[count - 1].setOnClick([this]() { quit(); });
+        buttons[0].setActive();
     }
 private:
     StaticContainer content;
     Label title;
-    TextButton buttons[7];
+    Label descriptionsLabels[4];
+    TextButton buttons[5];
 };
 } // namespace
+
+std::unique_ptr<MenuBase> createExtrasMenu(bool workshop) {
+    return std::make_unique<ModesMenu>(workshop);
+}
 
 MainMenu::MainMenu()
 {
@@ -131,13 +155,14 @@ MainMenu::MainMenu()
     continueButton.setOnClick([this]() { continueRecentGame(); canContinue = hasRecentGame(); });
     customButton.setText(_("Custom Game"));
     customButton.setOnClick([this]() { playCustomGame(); canContinue = hasRecentGame(); });
-    onlineButton.setText(_("Join Online"));
+    onlineButton.setText(_("Play Online"));
     onlineButton.setOnClick([]() { CrossplayMenu().showMenu(); });
     loadButton.setText(_("Load Game"));
     loadButton.setOnClick([this]() { showGameLibrary(); canContinue = hasRecentGame(); });
     campaignButton.setText(_("Campaign"));
     campaignButton.setOnClick([this]() { SinglePlayerMenu::playCampaign(); canContinue = hasRecentGame(); });
-    campaignButton.setActive();
+    workshopButton.setText(_("Workshop"));
+    workshopButton.setOnClick([]() { createExtrasMenu(true)->showMenu(); });
     modesButton.setText(_("Extras"));
     modesButton.setOnClick(std::bind(&MainMenu::onModes, this));
     dune2rEditorButton.setText("DUNE2R ASSETS");
@@ -185,16 +210,16 @@ MainMenu::MainMenu()
 
     }
     // Only visible destinations participate in keyboard navigation, in screen order.
-    TextButton* allButtons[] = {&continueButton, &campaignButton, &customButton, &onlineButton,
-                                &loadButton, &optionsButton, &modesButton, &quitButton};
+    TextButton* allButtons[] = {&continueButton, &onlineButton, &campaignButton, &customButton,
+                                &loadButton, &optionsButton, &workshopButton, &modesButton, &quitButton};
     for(TextButton* button : allButtons) {
+        button->setKeyboardFocusVisible(false);
         windowWidget.addWidget(button, Point(0, 0), Point(1, 1));
     }
     // The generic product logo must not imply DuneCity rules when Vanilla is active.
     logoPicture.setVisible(false);
     activeModLabel.setTextFontSize(24);
-    // Same-colour shadow supplies an extra pixel of weight to the lettering.
-    activeModLabel.setTextColor(COLOR_WHITE, COLOR_WHITE, COLOR_BLACK);
+    activeModLabel.setTextColor(COLOR_RGB(115,220,210), COLOR_TRANSPARENT, COLOR_TRANSPARENT);
     activeModLabel.setAlignment(static_cast<Alignment_Enum>(Alignment_HCenter | Alignment_VCenter));
     windowWidget.addWidget(&activeModLabel, Point(0, 0), Point(1, 1));
     refreshContextButtons();
@@ -209,8 +234,31 @@ MainMenu::MainMenu()
     } else {
         windowWidget.addWidget(&modVersionLabel, Point(12, getSize().y - 58), Point(220, 50));
     }
+#if defined(DUNECITY_DESKTOP_UPDATER)
+    updateButton.setKeyboardFocusVisible(false);
+    updateButton.setText(_("Check for updates"));
+    updateButton.setOnClick([this]() { onUpdate(); });
+    windowWidget.addWidget(&updateButton, Point(getSize().x-232, getSize().y-38), Point(220,28));
+    windowWidget.setWidgetGeometry(&modVersionLabel, Point(12,getSize().y-38), Point(180,28));
+    modVersionLabel.setAlignment(Alignment_Left);
+#endif
     if(canContinue) continueButton.setActive();
-    else campaignButton.setActive();
+    else onlineButton.setActive();
+}
+
+void MainMenu::handleInput(SDL_Event& event)
+{
+    if (DesktopUpdater::instance().busy()) return;
+    if(!pChildWindow && (event.type == SDL_KEYDOWN || event.type == SDL_MOUSEMOTION
+                       || event.type == SDL_MOUSEBUTTONDOWN)) {
+        const bool keyboard = event.type == SDL_KEYDOWN;
+        for(auto* button : {&continueButton, &onlineButton, &campaignButton, &customButton,
+                            &loadButton, &optionsButton, &workshopButton, &modesButton, &quitButton, &updateButton}) {
+            button->setKeyboardFocusVisible(keyboard);
+            if(keyboard) button->handleMouseMovement(-1,-1,false);
+        }
+    }
+    MenuBase::handleInput(event);
 }
 
 void MainMenu::refreshModVersionLabel()
@@ -229,7 +277,7 @@ void MainMenu::refreshModVersionLabel()
         try {
             ModInfo info = modManager.getModInfo(activeModName);
             if (!info.displayName.empty()) {
-                modDisplayName = info.displayName;
+                modDisplayName = info.displayName + (info.version.empty() ? "" : " " + info.version);
             } else if (!info.name.empty()) {
                 modDisplayName = info.name;
             } else if (!activeModName.empty()) {
@@ -255,7 +303,7 @@ void MainMenu::refreshModVersionLabel()
             --bannerFontSize;
         activeModLabel.setTextFontSize(bannerFontSize);
         activeModLabel.setText(bannerText);
-        modVersionLabel.setText("v" + std::string(VERSION));
+        modVersionLabel.setText("App v" + std::string(VERSION));
     } catch (const std::exception& e) {
         SDL_Log("MainMenu: setText failed: %s", e.what());
     }
@@ -269,20 +317,10 @@ int MainMenu::showMenu()
     try {
         musicPlayer->changeMusic(MUSIC_MENU);
 
-        // Start version check in background (only once)
-        if(!bVersionCheckStarted) {
-            bVersionCheckStarted = true;
-
-            pVersionChecker = std::make_unique<VersionChecker>(settings.network.metaServer);
-            pVersionChecker->setOnVersionCheckComplete([this](const VersionInfo& info) {
-                if(info.updateAvailable && !bUpdateDialogShown) {
-                    latestVersion = info.latestVersion;
-                    downloadURL = info.downloadURL;
-                    // Show dialog in update() when safe (not during callback)
-                }
-            });
-            pVersionChecker->checkForUpdates();
-        }
+#if defined(DUNECITY_DESKTOP_UPDATER)
+        auto& updater = DesktopUpdater::instance();
+        if (updater.state() == DesktopUpdater::State::Idle) updater.check();
+#endif
 
         menuResult = MenuBase::showMenu();
     } catch(const std::exception& e) {
@@ -303,29 +341,34 @@ void MainMenu::update()
     refreshModVersionLabel();
     refreshContextButtons();
 
-    // Process version check results
-#ifndef __EMSCRIPTEN__
-    if(pVersionChecker) {
-        pVersionChecker->update();
+#if defined(DUNECITY_DESKTOP_UPDATER)
+    auto& updater = DesktopUpdater::instance();
+    updater.poll();
+    using State = DesktopUpdater::State;
+    const auto state = updater.state();
+    const char* label = state == State::Checking ? "Checking for updates..." :
+                        state == State::Installing ? "Installing update..." :
+                        state == State::Available ? "Update available" : "Check for updates";
+    if (updateButton.getText() != label) updateButton.setText(_(label));
+    updateButton.setEnabled(state != State::Checking && state != State::Installing);
+    // Native updater dialogs run their own event loop. Keep all game-entry
+    // actions disabled for that entire session, including keyboard activation.
+    for (auto* button : {&continueButton, &onlineButton, &campaignButton, &customButton,
+                         &loadButton, &optionsButton, &workshopButton, &modesButton}) {
+        button->setEnabled(!updater.busy() && (button != &continueButton || canContinue));
+    }
+    if (state == State::Restart) { quit(); return; }
+    if (installationRequested && state != State::Installing && !pChildWindow) {
+        installationRequested = false;
+        if (state == State::Failed) openWindow(MsgBox::create(updater.message()));
+    }
+    if (manualUpdateCheck && state != State::Checking && state != State::Installing && !pChildWindow) {
+        manualUpdateCheck = false;
+        if (state == State::Current) openWindow(MsgBox::create(_("Dune City is up to date.")));
+        else if (state == State::Failed) openWindow(MsgBox::create(updater.message()));
+        else if (state == State::Available) onUpdate();
     }
 #endif
-
-    // Show update dialog if new version available and not already shown
-    if(!latestVersion.empty() && !bUpdateDialogShown && !pChildWindow) {
-        bUpdateDialogShown = true;
-
-        std::string message = _("A new version of Dune City is available!");
-        message += "\n\n";
-        message += _("Current: ");
-        message += VERSION;
-        message += "\n";
-        message += _("Latest: ");
-        message += latestVersion;
-        message += "\n\n";
-        message += _("Would you like to visit the download page?");
-
-        openWindow(QstBox::create(message, _("Download"), _("Later"), QSTBOX_BUTTON1));
-    }
 
     // First-launch "Enable city-sim mod?" prompt. Runs after the update
     // dialog so we don't stack two QstBoxes on top of each other.
@@ -353,26 +396,44 @@ void MainMenu::onChildWindowClose(Window* pChildWindow)
         return;
     }
 
-    if (pQstBox->getPressedButtonID() == QSTBOX_BUTTON1) {
-        // User clicked "Download" - open the download URL
-        if (!downloadURL.empty()) {
-            SDL_OpenURL(downloadURL.c_str());
+    if (updatePromptOpen) {
+        updatePromptOpen = false;
+        if (pQstBox->getPressedButtonID() == QSTBOX_BUTTON1) {
+            DesktopUpdater::instance().install();
+            installationRequested = true;
+            manualUpdateCheck = false;
         }
+    }
+}
+
+void MainMenu::onUpdate() {
+    auto& updater = DesktopUpdater::instance();
+    if (!updater.supported()) {
+#if defined(_WIN32)
+        openWindow(MsgBox::create(_("Install the Windows EXE edition once to enable in-game updates. Your saves and settings will be kept.")));
+#else
+        openWindow(MsgBox::create(_("Use the AppImage edition for in-game updates. For DEB/RPM or other installations, install the new package using your usual method.")));
+#endif
+        return;
+    }
+    if (updater.state() == DesktopUpdater::State::Available) {
+        updatePromptOpen = true;
+        openWindow(QstBox::create(_("Install Dune City ") + updater.version() +
+            _(" and restart?\n\nYour saves, settings and user mods will be kept."),
+            _("Install update"), _("Later"), QSTBOX_BUTTON2));
+    } else if (!updater.busy()) {
+        updater.check(); manualUpdateCheck = true;
     }
 }
 
 void MainMenu::onModes() const
 {
-    ModesMenu().showMenu();
+    createExtrasMenu(false)->showMenu();
 }
 
 void MainMenu::onDune2REditor() const
 {
-    if(ModManager::instance().isInitialized()
-       && ModManager::instance().getActiveModName() == "Dune2R") {
-        Dune2REditorMenu editor;
-        editor.showMenu();
-    }
+    ModMenu(ModMenu::Purpose::AssetEditors).showMenu();
 }
 
 void MainMenu::refreshContextButtons()
@@ -389,17 +450,17 @@ void MainMenu::refreshContextButtons()
     continueButton.setEnabled(canContinue);
     std::vector<TextButton*> buttons;
     if(canContinue) buttons.push_back(&continueButton);
-    for(auto* button : {&campaignButton,&customButton,&onlineButton,&loadButton,&optionsButton,&modesButton,&quitButton}) buttons.push_back(button);
+    for(auto* button : {&onlineButton,&campaignButton,&customButton,&loadButton,&optionsButton,&workshopButton,&modesButton,&quitButton}) buttons.push_back(button);
     const int width = enlargedStartMenus ? 320 : 280;
     const int x = (getSize().x-width)/2;
-    const int top = std::max(158, (getSize().y-310)/2);
+    const int top = std::max(132, (getSize().y-340)/2);
     planetPicture.setFitToSize(true);
-    windowWidget.setWidgetGeometry(&planetPicture, Point((getSize().x-176)/2,top-146), Point(176,100));
+    windowWidget.setWidgetGeometry(&planetPicture, Point((getSize().x-176)/2,top-122), Point(176,80));
     activeModLabel.setTextFontSize(16);
     windowWidget.setWidgetGeometry(&activeModLabel, Point(x-30,top-40), Point(width+60,30));
     buttonBorder.setVisible(false);
     const int gap = 5;
-    const int height = std::min(36, (getSize().y-top-20)/static_cast<int>(buttons.size())-gap);
+    const int height = std::min(36, (getSize().y-top-48)/static_cast<int>(buttons.size())-gap);
     for(size_t i=0; i<buttons.size(); ++i) {
         windowWidget.setWidgetGeometry(buttons[i], Point(x,top+static_cast<int>(i)*(height+gap)), Point(width,height));
     }
@@ -440,7 +501,7 @@ void MainMenu::showFirstLaunchCityPromptIfNeeded()
     bFirstLaunchPromptChecked = true;
 
     // Don't compete with the version-update dialog.
-    if (bUpdateDialogShown || pChildWindow != nullptr) {
+    if (updatePromptOpen || DesktopUpdater::instance().busy() || pChildWindow != nullptr) {
         // Reschedule on next tick by un-flagging.
         bFirstLaunchPromptChecked = false;
         return;

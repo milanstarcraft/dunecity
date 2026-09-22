@@ -224,6 +224,10 @@ target_sources(dunecity
         # Network
         Network/LANGameFinderAndAnnouncer.cpp
         Network/NetworkManager.cpp
+    Network/WebRtcPeerLifecycle.cpp
+        Network/LateJoin.cpp
+        Network/ObserverStream.cpp
+        Network/SnapshotTransfer.cpp
         Network/GamePayloadRouter.cpp
         Network/RoomRelayClient.cpp
         Network/RoomAdmissionClient.cpp
@@ -253,6 +257,10 @@ target_sources(dunecity
 
         # Mod System
         mod/Dune2RAssetManager.cpp
+        mod/WorkshopStore.cpp
+        mod/Workshop.cpp
+        mod/WorkshopClient.cpp
+        Menu/WorkshopCommunityMenu.cpp
         mod/ModManager.cpp
 
         # Structures
@@ -374,6 +382,7 @@ target_sources(dunecity
         misc/FileSystem.cpp
         misc/fnkdat.cpp
         misc/format.cpp
+        misc/FrameYield.cpp
         misc/IFileStream.cpp
         misc/md5.cpp
         misc/OFileStream.cpp
@@ -435,6 +444,13 @@ target_include_directories(dunecity PRIVATE
     ${CMAKE_SOURCE_DIR}/src
 )
 
+# p2pkit SDK headers (path + install guard defined in the top-level
+# CMakeLists.txt): the packet streams and the WebRTC transport alias in
+# include/Network/ are thin adapters over them.
+target_include_directories(dunecity PRIVATE
+    "${DUNECITY_P2PKIT_DIR}/emscripten/include"
+)
+
 # Platform-specific include directories
 if(APPLE)
     target_include_directories(dunecity PRIVATE
@@ -483,6 +499,13 @@ if(EMSCRIPTEN)
         Network/RelayWebSocketEmscripten.cpp
         Network/RelayHttpTransportEmscripten.cpp
         Network/DirectPeerConnectionEmscripten.cpp)
+
+    # WebRTC multiplayer transport (browser only): NetworkManager reaches the
+    # browser bridge through include/Network/WebRtcTransport.h, an alias of the
+    # header-only p2pkit_wasm::WebRtcTransport from the installed p2pkit SDK
+    # (no WebRtcTransport.cpp of our own). The bridge itself is the SDK's
+    # --js-library glue plus DuneCity's adapter, linked in the target_link_options
+    # block below.
 else()
     target_sources(dunecity PRIVATE
         Network/RelayWebSocketCurl.cpp
@@ -520,9 +543,9 @@ if(EMSCRIPTEN)
     endforeach()
 
     # The direct-play bridge bundle. It is generated from platform/web/src/dune-direct-bridge.ts
-    # and the vendored P2PKit source by tools/p2pkit-build, and committed, so a clean clone builds
-    # without npm at configure time. Copied, never built here; if it is missing the game still
-    # builds and simply reports that this page cannot open direct connections.
+    # and the pinned P2PKit dependency by tools/p2pkit-build, and committed.
+    # Install the SDK before configuring; this bundle is copied, never built here.
+    # If missing, the game reports that this page cannot open direct connections.
     if(EXISTS "${CMAKE_SOURCE_DIR}/platform/web/p2p-direct.js")
         configure_file("${CMAKE_SOURCE_DIR}/platform/web/p2p-direct.js"
             "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/p2p-direct.js" COPYONLY)
@@ -531,8 +554,25 @@ if(EMSCRIPTEN)
                        "the browser build will have no direct-play bridge")
     endif()
     set_property(TARGET dunecity APPEND PROPERTY LINK_DEPENDS
-        "${CMAKE_SOURCE_DIR}/web/shell.html")
+        "${CMAKE_SOURCE_DIR}/web/shell.html"
+        "${CMAKE_SOURCE_DIR}/platform/web/dist/p2pkit.iife.js"
+        "${CMAKE_SOURCE_DIR}/platform/web/dunecity_webrtc_config.js"
+        "${DUNECITY_P2PKIT_DIR}/emscripten/js/p2pkit_webrtc_glue.cjs")
+    # Matchmaking also needs the SDK runtime before the Emscripten module.
+    # Package it after every link, including raw CMake/incremental builds;
+    # relying on the optional wrapper left the website workflow without it.
+    find_program(DUNECITY_NODE_EXECUTABLE NAMES node REQUIRED)
+    set_property(TARGET dunecity APPEND PROPERTY LINK_DEPENDS
+        "${CMAKE_SOURCE_DIR}/tools/web/prepend-p2pkit.mjs")
+    add_custom_command(TARGET dunecity POST_BUILD
+        COMMAND "${DUNECITY_NODE_EXECUTABLE}"
+            "${CMAKE_SOURCE_DIR}/tools/web/prepend-p2pkit.mjs"
+            "${CMAKE_SOURCE_DIR}/platform/web/dist/p2pkit.iife.js"
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/dunecity.js"
+        COMMENT "Package the pinned matchmaking runtime"
+        VERBATIM)
     target_compile_options(dunecity PRIVATE
+        "SHELL:-sUSE_ZLIB=1"
         "SHELL:-sUSE_SDL=2"
         "SHELL:-sUSE_SDL_MIXER=2"
         "SHELL:-sUSE_SDL_TTF=2"
@@ -544,6 +584,7 @@ if(EMSCRIPTEN)
         # optimizer pipeline. Binaryen's -O3 local2Stack pass grows prohibitively
         # on this Asyncify build (over 20 minutes / 12 GB in the release probe).
         "$<$<CONFIG:Release>:-O2>"
+        "SHELL:-sUSE_ZLIB=1"
         "SHELL:-sUSE_SDL=2"
         "SHELL:-sUSE_SDL_MIXER=2"
         "SHELL:-sUSE_SDL_TTF=2"
@@ -568,14 +609,23 @@ if(EMSCRIPTEN)
         "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/imported_sprites@/imported_sprites"
         "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/mods/Tornie@/mods/Tornie"
         "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/mods/Dune2R@/mods/Dune2R"
+        "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/mods/dunecity@/mods/dunecity"
         # Keep the Dune2R mod/catalog available; its optional art downloads
         # separately, just as in the native packages.
         "SHELL:--exclude-file ${CMAKE_SOURCE_DIR}/mods/Dune2R/graphics_hd/units"
         "SHELL:--exclude-file ${CMAKE_SOURCE_DIR}/mods/Dune2R/graphics_compact/objpics"
+        # WebRTC multiplayer bridge (browser only), reached from C++ through
+        # include/Network/WebRtcTransport.h. The generic transport glue is the
+        # p2pkit SDK's own --js-library (installed dependency, not a copy);
+        # dunecity_webrtc_config.js is DuneCity's adapter on top of it (lobby
+        # wiring, Emscripten event pump, stats).
+        "SHELL:--js-library ${DUNECITY_P2PKIT_DIR}/emscripten/js/p2pkit_webrtc_glue.cjs"
+        "SHELL:--js-library ${CMAKE_SOURCE_DIR}/platform/web/dunecity_webrtc_config.js"
     )
     file(GLOB_RECURSE WEB_MOD_FILES CONFIGURE_DEPENDS
         "${CMAKE_SOURCE_DIR}/mods/Tornie/*"
-        "${CMAKE_SOURCE_DIR}/mods/Dune2R/*")
+        "${CMAKE_SOURCE_DIR}/mods/Dune2R/*"
+        "${CMAKE_SOURCE_DIR}/mods/dunecity/*")
     list(FILTER WEB_MOD_FILES EXCLUDE REGEX "/graphics_hd/units/|/graphics_compact/objpics/")
     set_property(TARGET dunecity APPEND PROPERTY LINK_DEPENDS ${WEB_MOD_FILES})
 else()
@@ -587,6 +637,7 @@ else()
             $<IF:$<TARGET_EXISTS:SDL2_ttf::SDL2_ttf>,SDL2_ttf::SDL2_ttf,SDL2_ttf::SDL2_ttf-static>
             $<IF:$<TARGET_EXISTS:SDL2::SDL2>,SDL2::SDL2,SDL2::SDL2-static>
             CURL::libcurl
+            ZLIB::ZLIB
             $<IF:$<TARGET_EXISTS:miniupnpc::miniupnpc>,miniupnpc::miniupnpc,${MINIUPNPC_LIBRARY}>
             $<$<BOOL:${DISCORD_RPC_LIBRARY}>:${DISCORD_RPC_LIBRARY}>
             $<$<PLATFORM_ID:Android>:c++_shared>
@@ -613,6 +664,8 @@ if(APPLE)
             "-framework CoreFoundation"
     )
 endif()
+
+include(${CMAKE_SOURCE_DIR}/cmake/DesktopUpdater.cmake)
 
 # Compiler options
 target_compile_options(dunecity
@@ -863,9 +916,16 @@ if(WIN32)
     install(TARGETS dunecity
         RUNTIME DESTINATION .
     )
+    # vcpkg app-local deployment copies its DLLs but not the MSVC runtime.
+    # Bundle the redistributable runtime beside the game so a clean Windows
+    # machine does not need Visual Studio or a separate VC++ installer.
+    if(MSVC)
+        set(CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION ".")
+        include(InstallRequiredSystemLibraries)
+    endif()
     # Install vcpkg DLLs for Windows
     if(CMAKE_BUILD_TYPE STREQUAL "Release" OR NOT CMAKE_BUILD_TYPE)
-        install(DIRECTORY ${CMAKE_BINARY_DIR}/bin/Release/
+        install(DIRECTORY "$<TARGET_FILE_DIR:dunecity>/"
             DESTINATION .
             FILES_MATCHING PATTERN "*.dll"
         )
@@ -880,10 +940,21 @@ elseif(APPLE)
     # invokes the install rules in a staging tree, so BundleUtilities copies
     # every non-system dylib into Contents/Frameworks and rewrites its load
     # commands before the final signature is applied.
-    set(DUNECITY_MACOS_DEPENDENCY_DIRS "")
+    set(DUNECITY_MACOS_DEPENDENCY_DIRS "${dunecity_sparkle_SOURCE_DIR}")
     if(DEFINED VCPKG_INSTALLED_DIR AND DEFINED VCPKG_TARGET_TRIPLET)
         list(APPEND DUNECITY_MACOS_DEPENDENCY_DIRS
             "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib")
+    endif()
+
+    # Homebrew SDL2 may be sdl2-compat, which dlopens SDL3 instead of linking
+    # it. BundleUtilities cannot discover that runtime-only dependency.
+    find_library(DUNECITY_MACOS_SDL3_LIBRARY NAMES SDL3)
+    if(DUNECITY_MACOS_SDL3_LIBRARY)
+        get_filename_component(_sdl3_real "${DUNECITY_MACOS_SDL3_LIBRARY}" REALPATH)
+        get_filename_component(_sdl3_libdir "${_sdl3_real}" DIRECTORY)
+        find_file(DUNECITY_MACOS_SDL3_LICENSE NAMES LICENSE.txt
+            HINTS "${_sdl3_libdir}/.." "${_sdl3_libdir}/../share/licenses/SDL3"
+            NO_DEFAULT_PATH)
     endif()
 
     # Re-sign last because dependency fixup changes the executable and copied
@@ -892,12 +963,44 @@ elseif(APPLE)
     install(CODE "
         include(BundleUtilities)
         set(BU_CHMOD_BUNDLE_ITEMS ON)
+        set(BU_COPY_FULL_FRAMEWORK_CONTENTS ON)
+        set(_runtime_libraries \"\")
+        execute_process(COMMAND /usr/bin/strings \"$<TARGET_FILE:SDL2::SDL2>\"
+            OUTPUT_VARIABLE _sdl2_strings RESULT_VARIABLE _sdl2_result)
+        if(NOT _sdl2_result EQUAL 0)
+            message(FATAL_ERROR \"Could not inspect SDL2 runtime requirements\")
+        endif()
+        if(_sdl2_strings MATCHES \"SDL2COMPAT_DEBUG_LOGGING\")
+            if(NOT EXISTS \"${DUNECITY_MACOS_SDL3_LIBRARY}\" OR NOT EXISTS \"${DUNECITY_MACOS_SDL3_LICENSE}\")
+                message(FATAL_ERROR \"sdl2-compat requires SDL3 and its license for packaging\")
+            endif()
+            set(_sdl3_bundle \"\${CMAKE_INSTALL_PREFIX}/dunecity.app/Contents/Frameworks/libSDL3.dylib\")
+            file(MAKE_DIRECTORY \"\${CMAKE_INSTALL_PREFIX}/dunecity.app/Contents/Frameworks\")
+            configure_file(\"${DUNECITY_MACOS_SDL3_LIBRARY}\" \"\${_sdl3_bundle}\" COPYONLY)
+            list(APPEND _runtime_libraries \"\${_sdl3_bundle}\")
+            file(MAKE_DIRECTORY \"\${CMAKE_INSTALL_PREFIX}/dunecity.app/Contents/Resources/licenses\")
+            configure_file(\"${DUNECITY_MACOS_SDL3_LICENSE}\"
+                \"\${CMAKE_INSTALL_PREFIX}/dunecity.app/Contents/Resources/licenses/SDL3-LICENSE.txt\" COPYONLY)
+        endif()
         message(STATUS \"Bundling macOS runtime dependencies...\")
         fixup_bundle(
             \"\${CMAKE_INSTALL_PREFIX}/dunecity.app\"
-            \"\"
+            \"\${_runtime_libraries}\"
             \"${DUNECITY_MACOS_DEPENDENCY_DIRS}\"
         )
+        # BundleUtilities flattens framework-root executable symlinks. Restore
+        # Sparkle's complete, already portable framework before signing, keeping
+        # the game's rewritten dependency paths and the bundled game dylibs.
+        if(EXISTS \"${dunecity_sparkle_SOURCE_DIR}/Sparkle.framework\")
+            file(REMOVE_RECURSE \"\${CMAKE_INSTALL_PREFIX}/dunecity.app/Contents/Frameworks/Sparkle.framework\")
+            execute_process(COMMAND /usr/bin/ditto
+                \"${dunecity_sparkle_SOURCE_DIR}/Sparkle.framework\"
+                \"\${CMAKE_INSTALL_PREFIX}/dunecity.app/Contents/Frameworks/Sparkle.framework\"
+                RESULT_VARIABLE _sparkle_copy_result)
+            if(NOT _sparkle_copy_result EQUAL 0)
+                message(FATAL_ERROR \"Could not preserve the Sparkle framework\")
+            endif()
+        endif()
         message(STATUS \"Re-codesigning installed dunecity.app...\")
         execute_process(
             COMMAND codesign --force --deep --sign - \"\${CMAKE_INSTALL_PREFIX}/dunecity.app\"

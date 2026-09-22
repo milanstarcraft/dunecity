@@ -78,8 +78,12 @@ private:
     DropDownBox interfaceSizeDropDownBox;
     DropDownBox aspectDropDownBox;
     HBox        scrollHBox;
+    HBox        cameraKeysHBox, mouseOrdersHBox, movementPathsHBox;
+    Checkbox    wasdCameraCheckbox, leftClickOrdersCheckbox, movementPathsCheckbox;
     DropDownBox scrollSpeedDropDownBox;
     HBox        introHBox;
+    HBox        diagnosticLogsHBox;
+    Checkbox    diagnosticLogsCheckbox;
     HBox        flagsHBox;
 
     HBox        NameHBox;
@@ -92,6 +96,8 @@ private:
     HBox        generalHBox;
     DropDownBox aiDropDownBox;
     Checkbox    introCheckbox;
+    HBox        duneCitySkinHBox;
+    DropDownBox duneCityCampaignSkinDropDownBox;
 
     HBox        resolutionHBox;
     DropDownBox resolutionDropDownBox;

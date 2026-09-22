@@ -34,11 +34,13 @@
 #include <players/PlayerFactory.h>
 #include <players/QuantBotConfig.h>
 #include <mod/ModManager.h>
+#include <Network/WorkshopGameContent.h>
 
 #include <misc/fnkdat.h>
 #include <misc/FileSystem.h>
 #include <misc/WebRuntime.h>
 #include <misc/draw_util.h>
+#include <misc/FrameYield.h>
 #include <misc/string_util.h>
 #include <misc/IMemoryStream.h>
 
@@ -156,9 +158,37 @@ int resolveSelectedColorSlot(int selectedColor, int selectedHouse) {
 }
 
 
-CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings, bool server, bool LANServer, CustomPlaySetup* newSetup, const ChangeEventList* initialPlayers)
- : MenuBase(), gameInitSettings(newGameInitSettings), bServer(server), bLANServer(LANServer), startGameTime(0), bConfigMismatchDetected(false), bModDownloadInProgress(false), bWaitingForModAcks(false), brainEqHumanSlot(-1) {
+CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings, bool server, bool LANServer, CustomPlaySetup* newSetup, const ChangeEventList* initialPlayers, bool startImmediately)
+ : MenuBase(), gameInitSettings(newGameInitSettings), bServer(server), bLANServer(LANServer),
+   duneCitySkinControls(ModManager::instance().isCityModeActive()), startGameTime(0),
+   bConfigMismatchDetected(false), bModDownloadInProgress(false), bWaitingForModAcks(false), brainEqHumanSlot(-1) {
     setup = newSetup;
+    // Only the main Campaign route skips the roster. Keep the normal content,
+    // readiness and acknowledged-start handshake for its online session.
+    this->startImmediately = startImmediately && server && !newSetup
+        && isCoopGameType(newGameInitSettings.getGameType());
+    automaticStartPending = this->startImmediately;
+    if(isNetworkGameType(gameInitSettings.getGameType())) {
+        bool publishBeforeSetup = false;
+#ifdef __EMSCRIPTEN__
+        // Find Match uses the mesh packet protocol over browser data channels.
+        // Its map is chosen after pairing, so publish before sending game setup.
+        publishBeforeSetup = pNetworkManager && !pNetworkManager->isRoomSession();
+#endif
+        if(bServer) WorkshopGameContent::pin(gameInitSettings, publishBeforeSetup,
+            !publishBeforeSetup && (!pNetworkManager || !pNetworkManager->isRoomSession()));
+        else if(pNetworkManager && pNetworkManager->supportsModTransfer()) {
+            try { WorkshopGameContent::resolveMod(gameInitSettings, false); }
+            catch(const std::exception&) {
+                // The following MOD_INFO packet starts a bounded host transfer. Until
+                // its complete manifest verifies, no readiness acknowledgment is sent.
+                bModDownloadInProgress = true;
+                waitingForModInstall = true;
+            }
+        } else WorkshopGameContent::resolveMod(gameInitSettings);
+        duneCitySkinControls = ModManager::instance().isCityModeActive();
+    }
+    installerApprovedForDisplay = OnlineModPolicy::approved();
     const bool compactPlayers = getRendererWidth() < 800;
 
     // set up window
@@ -170,7 +200,8 @@ CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings
 
     windowWidget.addWidget(&mainVBox, Point(24,23), Point(getRendererWidth() - 48, getRendererHeight() - 32));
 
-    captionLabel.setText(getBasename(gameInitSettings.getFilename(), true));
+    captionLabel.setText(getBasename(gameInitSettings.getFilename(), true)
+        + (gameInitSettings.getMapRevisionVersion() ? " v" + std::to_string(gameInitSettings.getMapRevisionVersion()) : ""));
     captionLabel.setAlignment(Alignment_HCenter);
     captionHBox.addWidget(&captionLabel, 1.0);
     copyCodeButton.setText(_("Copy code"));
@@ -191,7 +222,8 @@ CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings
         setupBrowseMaps.setOnClick([this]() { onCancel(); });
         setupMapRow.addWidget(&setupBrowseMaps, 110);
         setupMapRow.addWidget(Label::create(_("Mod")), 40);
-        for(size_t i = 0; i < setup->mods.size(); ++i) setupMod.addEntry(setup->mods[i].displayName, static_cast<int>(i));
+        for(size_t i = 0; i < setup->mods.size(); ++i) setupMod.addEntry(setup->mods[i].selectionLabel(), static_cast<int>(i));
+        setupMod.setEnabled(gameInitSettings.getMapRevisionHash().empty());
         setupMod.setSelectedItem(setup->mod);
         setupMod.setOnSelectionChange([this](bool interactive) { if(interactive) { setup->mod = setupMod.getSelectedIndex(); rebuildSetup(false); } });
         setupMapRow.addWidget(&setupMod, 155);
@@ -282,6 +314,14 @@ CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings
         extractMapInfo(&inimap);
     }
 
+#ifdef __EMSCRIPTEN__
+    // Browser build: extractMapInfo() above (full map INI parse + minimap
+    // render) ran as one synchronous block inside the Next click handler.
+    // Yield before building the lobby widgets so the page can service input
+    // and signaling between the two halves of the transition.
+    yieldFrameToBrowser();
+#endif
+
     rightVBox.addWidget(VSpacer::create(10));
     rightVBox.addWidget(&mapPropertiesHBox, 0.01);
     mapPropertiesHBox.addWidget(&mapPropertyNamesVBox, 75);
@@ -296,8 +336,17 @@ CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings
     mapPropertyValuesVBox.addWidget(&mapPropertyLicense);
     mapPropertyNamesVBox.addWidget(Label::create(_("Mod") + ":"));
     ModInfo activeModInfo = ModManager::instance().getModInfo(ModManager::instance().getActiveModName());
-    mapPropertyMod.setText(activeModInfo.displayName);
+    mapPropertyMod.setText(activeModInfo.displayName + (gameInitSettings.getModRevisionVersion() ? " v" + std::to_string(gameInitSettings.getModRevisionVersion()) : ""));
+    mapPropertyCity.setText(activeModInfo.enablesCityMode ? _("On") : _("Off"));
     mapPropertyValuesVBox.addWidget(&mapPropertyMod);
+#ifdef __EMSCRIPTEN__
+    // Browser: the matchmaking lobby already paired us; show how the matched
+    // opponent's connection is doing.
+    mapPropertyNamesVBox.addWidget(Label::create(_("Opponent") + ":"));
+    mapPropertyValuesVBox.addWidget(&opponentLabel);
+#endif
+    mapPropertyNamesVBox.addWidget(Label::create(_("City sim") + ":"));
+    mapPropertyValuesVBox.addWidget(&mapPropertyCity);
     rightVBox.addWidget(Spacer::create());
 
     mainVBox.addWidget(Spacer::create(), 0.04);
@@ -383,7 +432,7 @@ CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings
             curHouseInfo.houseDropDown.setEnabled(bServer);
         }
         curHouseInfo.houseDropDown.setOnSelectionChange(std::bind(&CustomGamePlayers::onChangeHousesDropDownBoxes, this, std::placeholders::_1, i));
-        curHouseInfo.houseHBox.addWidget(&curHouseInfo.houseDropDown, compactPlayers && bBonusHouseColorsAvailable ? 85 : 95);
+        curHouseInfo.houseHBox.addWidget(&curHouseInfo.houseDropDown, compactPlayers && (bBonusHouseColorsAvailable || duneCitySkinControls) ? 85 : 95);
 
         if(bLoadMultiplayer) {
             if(i < (int) houseInfoListSetup.size()) {
@@ -402,8 +451,30 @@ CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings
             curHouseInfo.teamDropDown.setEnabled(bServer);
         }
         curHouseInfo.teamDropDown.setOnSelectionChange(std::bind(&CustomGamePlayers::onChangeTeamDropDownBoxes, this, std::placeholders::_1, i));
-        curHouseInfo.houseHBox.addWidget(HSpacer::create(10));
-        curHouseInfo.houseHBox.addWidget(&curHouseInfo.teamDropDown, compactPlayers && bBonusHouseColorsAvailable ? 70 : 85);
+        curHouseInfo.houseHBox.addWidget(HSpacer::create(compactPlayers && duneCitySkinControls ? 5 : 10));
+        curHouseInfo.houseHBox.addWidget(&curHouseInfo.teamDropDown, compactPlayers && (bBonusHouseColorsAvailable || duneCitySkinControls) ? 70 : 85);
+
+        if(duneCitySkinControls) {
+            GameInitSettings::GraphicsSkin selectedSkin = GameInitSettings::GraphicsSkin::SimCity;
+            if(bLoadMultiplayer && i < static_cast<int>(houseInfoListSetup.size())) {
+                selectedSkin = houseInfoListSetup.at(i).graphicsSkin;
+            }
+            curHouseInfo.graphicsSkinLabel.setText(_("Skin"));
+            curHouseInfo.graphicsSkinLabel.setTextFontSize(12);
+            curHouseInfo.graphicsSkinDropDown.addEntry(
+                _("SimCity"), static_cast<int>(GameInitSettings::GraphicsSkin::SimCity));
+            curHouseInfo.graphicsSkinDropDown.addEntry(
+                _("Dune2"), static_cast<int>(GameInitSettings::GraphicsSkin::Dune2));
+            curHouseInfo.graphicsSkinDropDown.setSelectedItem(
+                selectedSkin == GameInitSettings::GraphicsSkin::Dune2 ? 1 : 0);
+            curHouseInfo.graphicsSkinDropDown.setEnabled(!bLoadMultiplayer && bServer);
+            curHouseInfo.graphicsSkinDropDown.setOnSelectionChange(
+                std::bind(&CustomGamePlayers::onChangeGraphicsSkinDropDownBoxes,
+                          this, std::placeholders::_1, i));
+            curHouseInfo.houseHBox.addWidget(HSpacer::create(6));
+            curHouseInfo.houseHBox.addWidget(&curHouseInfo.graphicsSkinLabel, 30);
+            curHouseInfo.houseHBox.addWidget(&curHouseInfo.graphicsSkinDropDown, 72);
+        }
 
         int selectedColor = HOUSE_INVALID;
         if(bLoadMultiplayer) {
@@ -426,12 +497,12 @@ CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings
         }
         curHouseInfo.bonusColorCheckbox.setOnClick(std::bind(&CustomGamePlayers::onBonusColorCheckbox, this, i));
         curHouseInfo.colorDropDown.setOnSelectionChange(std::bind(&CustomGamePlayers::onChangeColorDropDownBoxes, this, std::placeholders::_1, i));
-        curHouseInfo.houseHBox.addWidget(HSpacer::create(10));
+        curHouseInfo.houseHBox.addWidget(HSpacer::create(compactPlayers && duneCitySkinControls ? 5 : 10));
         if(bBonusHouseColorsAvailable) {
             curHouseInfo.houseHBox.addWidget(&curHouseInfo.bonusColorCheckbox, 75);
             curHouseInfo.houseHBox.addWidget(HSpacer::create(6));
         }
-        curHouseInfo.houseHBox.addWidget(&curHouseInfo.colorDropDown, compactPlayers && bBonusHouseColorsAvailable ? 85 : 95);
+        curHouseInfo.houseHBox.addWidget(&curHouseInfo.colorDropDown, compactPlayers && (bBonusHouseColorsAvailable || duneCitySkinControls) ? 85 : 95);
 
         curHouseInfo.houseInfoVBox.addWidget(&curHouseInfo.houseHBox);
 
@@ -578,6 +649,12 @@ CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings
         playerListVBox.addWidget(VSpacer::create(4), 0.0);
         playerListVBox.addWidget(Spacer::create(), 0.07);
 
+#ifdef __EMSCRIPTEN__
+        // Browser build: each house row builds several dropdowns with full
+        // entry lists; yield per row to keep the lobby transition paced.
+        yieldFrameToBrowser();
+#endif
+
         if(i >= numHouses) {
             curHouseInfo.houseInfoVBox.setEnabled(false);
             curHouseInfo.houseInfoVBox.setVisible(false);
@@ -594,6 +671,16 @@ CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings
             if(index >= 0) shared.player2DropDown.addEntry(PlayerFactory::getByIndex(index)->getName(), index);
         }
         shared.player2DropDown.setSelectedItem(0);
+    }
+    if(this->startImmediately) {
+        for(const auto& house : fixedCoopHouses) {
+            if(house.houseID != gameInitSettings.getHouseID() || house.playerInfoList.size() < 2) continue;
+            const auto& partner = *std::next(house.playerInfoList.begin());
+            const int index = PlayerFactory::getIndexByPlayerClass(partner.playerClass);
+            auto& choices = houseInfo[0].player2DropDown;
+            for(unsigned i = 0; i < choices.getNumEntries(); ++i)
+                if(choices.getEntryIntData(i) == index) choices.setSelectedItem(i);
+        }
     }
     onChangeHousesDropDownBoxes(false);
 
@@ -670,7 +757,7 @@ CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings
             }
         }
 
-        if(pNetworkManager->isRelaySession() && !bServer) {
+        if(pNetworkManager->isRoomSession() && !bServer) {
             // Send our content fingerprint now, while the room is certainly still a lobby. On
             // the relay the host may declare the match started in the same breath as it sends
             // its own hashes, so answering that message later would be too late.
@@ -678,7 +765,53 @@ CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings
                                             getObjectDataHash(), VERSIONSTRING);
         }
     }
+
+    if(this->startImmediately) {
+        // Show progress, never the editable pregame roster, while starting.
+        setWindowWidget(&launchWidget);
+        const int width = getSize().x, height = getSize().y;
+        launchTitle.setText(_("Starting campaign"));
+        launchStatus.setText(_("Preparing your online game..."));
+        cancelLaunch.setText(_("Back"));
+        cancelLaunch.setOnClick([this]() { onCancel(); });
+        launchWidget.addWidget(&launchTitle, Point(20, height/3), Point(width-40, 32));
+        launchWidget.addWidget(&launchStatus, Point(20, height/3+48), Point(width-40, 100));
+        launchWidget.addWidget(&cancelLaunch, Point(width/2-80, height-70), Point(160, 30));
+    }
+#ifdef __EMSCRIPTEN__
+    // The opponent's connection state changes asynchronously; update()
+    // refreshes the label.
+    updateOpponentLabel();
+#endif
 }
+
+#ifdef __EMSCRIPTEN__
+void CustomGamePlayers::updateOpponentLabel() {
+    if(pNetworkManager == nullptr) {
+        opponentLabel.setText("-");
+        return;
+    }
+
+    switch(pNetworkManager->getWebRtcState()) {
+        case WebRtcTransport::State::Connecting: {
+            opponentLabel.setText(_("Connecting..."));
+        } break;
+
+        case WebRtcTransport::State::Connected: {
+            opponentLabel.setText(_("Connected"));
+        } break;
+
+        case WebRtcTransport::State::Failed: {
+            opponentLabel.setText(_("Connection failed"));
+        } break;
+
+        case WebRtcTransport::State::Idle:
+        default: {
+            opponentLabel.setText("-");
+        } break;
+    }
+}
+#endif
 
 void CustomGamePlayers::updateDiscordLobbyPresence() {
     if(pNetworkManager == nullptr) return;
@@ -722,6 +855,18 @@ CustomGamePlayers::~CustomGamePlayers()
 
 int CustomGamePlayers::showMenu() {
     const int result = MenuBase::showMenu();
+    if(rebuildAfterModTransfer) {
+        // House availability, sprites and map preview all depend on the installed mod.
+        // Rebuild after the network callback returns, replay the host's buffered setup,
+        // and only then acknowledge readiness.
+        CustomGamePlayers restored(gameInitSettings, false);
+        restored.onReceiveChangeEventList(delayedModChanges);
+        if(pNetworkManager) {
+            pNetworkManager->sendConfigHash(getQuantBotConfig().getConfigHash(), getObjectDataHash(), VERSIONSTRING);
+            pNetworkManager->sendModAck(true, ModManager::instance().getEffectiveChecksums().combined);
+        }
+        return restored.showMenu();
+    }
     if(setup && result == MENU_QUIT_DEFAULT) {
         setup->players = getChangeEventList();
         return MENU_SETUP_MAP;
@@ -742,14 +887,24 @@ void CustomGamePlayers::onChildWindowClose(Window* child) {
 }
 
 void CustomGamePlayers::update() {
+    if(automaticStartPending) {
+        automaticStartPending = false;
+        onNext();
+    }
+#ifdef __EMSCRIPTEN__
+    updateOpponentLabel();
+#endif
+
     if(isCoopGameType(gameInitSettings.getGameType()) && startGameTime == 0 && bServer && !bWaitingForModAcks) {
         const int partner = houseInfo[0].player2DropDown.getSelectedEntryIntData();
-        const bool waiting = partner == PLAYER_OPEN || partner == PLAYER_CLOSED;
-        nextButton.setEnabled(!waiting);
-        readinessLabel.setText(waiting ? _("Waiting for your co-op partner, or choose an AI partner.") : _("Your co-op partner is ready."));
+        const bool solo = partner == PLAYER_OPEN || partner == PLAYER_CLOSED;
+        nextButton.setEnabled(houseInfo[0].player1DropDown.getSelectedEntryIntData() == PLAYER_HUMAN);
+        readinessLabel.setText(!installerApprovedForDisplay
+            ? _("Players must join this lobby before you start. Hot joining is unavailable for new mods.")
+            : solo ? _("Start now. Others can watch or ask to join while you play.") : _("Your co-op partner is ready."));
     } else if(!bServer && startGameTime == 0) readinessLabel.setText(_("Waiting for the host to start."));
     else if(setup) readinessLabel.setText(setup->online
-        ? _("Leave an open player slot for a friend. Create Lobby when ready.")
+        ? _("Create Lobby when ready. Friends can replace an AI; hot join also allows spectators.")
         : _("Choose your map and opponents, then Start Game."));
 
     if(startGameTime > 0) {
@@ -762,6 +917,10 @@ void CustomGamePlayers::update() {
         
         if(SDL_GetTicks() >= startGameTime) {
             startGameTime = 0;
+            if(!WorkshopGameContent::matches(gameInitSettings)) {
+                onConfigMismatch(_("The selected mod revision changed. Reopen the lobby to share the updated version."));
+                return;
+            }
 
             pNetworkManager->setOnPeerDisconnected(std::function<void (const std::string&, bool, int)>());
             pNetworkManager->setGetChangeEventListForNewPlayerCallback(std::function<ChangeEventList (const std::string&)>());
@@ -822,6 +981,17 @@ LobbyAuthorization::SeatSnapshot CustomGamePlayers::makeSeatSnapshot() const {
 void CustomGamePlayers::onReceiveChangeEventList(const std::string& senderName,
                                                  const ChangeEventList& changeEventList)
 {
+    if(!bServer && waitingForModInstall) {
+        // Keep the authoritative events, not the incomplete pre-download widgets.
+        if(delayedModChanges.changeEventList.size() + changeEventList.changeEventList.size() > 4096) {
+            onConfigMismatch(_("Too many lobby changes arrived while receiving the mod."));
+            return;
+        }
+        delayedModChanges.changeEventList.insert(delayedModChanges.changeEventList.end(),
+            changeEventList.changeEventList.begin(), changeEventList.changeEventList.end());
+        return;
+    }
+
     // On the host a non-empty sender is a remote client, and everything it asks for has to be
     // something its own widgets could have produced: it may claim a seat for itself and change
     // the house it occupies, nothing else. The whole transaction is judged first, so a list
@@ -903,6 +1073,13 @@ void CustomGamePlayers::onReceiveChangeEventList(const std::string& senderName,
                 onChangeHousesDropDownBoxes(false, changeEvent.slot);
             } break;
 
+            case ChangeEventList::ChangeEvent::EventType::ChangeGraphicsSkin: {
+                const auto skin = GameInitSettings::sanitizeGraphicsSkin(changeEvent.newValue);
+                HouseInfo& curHouseInfo = houseInfo[changeEvent.slot];
+                curHouseInfo.graphicsSkinDropDown.setSelectedItem(
+                    skin == GameInitSettings::GraphicsSkin::Dune2 ? 1 : 0);
+            } break;
+
             case ChangeEventList::ChangeEvent::EventType::ChangePlayer: {
                 int newPlayer = (int) changeEvent.newValue;
 
@@ -967,6 +1144,11 @@ ChangeEventList CustomGamePlayers::getChangeEventList()
         changeEventList.changeEventList.push_back(ChangeEventList::ChangeEvent(ChangeEventList::ChangeEvent::EventType::ChangeHouse, i, houseID));
         changeEventList.changeEventList.push_back(ChangeEventList::ChangeEvent(ChangeEventList::ChangeEvent::EventType::ChangeTeam, i, team));
         changeEventList.changeEventList.push_back(ChangeEventList::ChangeEvent(ChangeEventList::ChangeEvent::EventType::ChangeColor, i, color));
+        if(duneCitySkinControls) {
+            const int skin = curHouseInfo.graphicsSkinDropDown.getSelectedEntryIntData();
+            changeEventList.changeEventList.emplace_back(
+                ChangeEventList::ChangeEvent::EventType::ChangeGraphicsSkin, i, skin);
+        }
 
         if(player1 == PLAYER_HUMAN) {
             std::string playername = curHouseInfo.player1DropDown.getSelectedEntry();
@@ -1088,12 +1270,54 @@ void CustomGamePlayers::onReceiveModInfo(const std::string& modName, const std::
         // Server shouldn't receive this
         return;
     }
+    if(communityModDownloadInProgress) return;
     
     SDL_Log("CLIENT: Received mod info from host - mod='%s', checksum=%s", modName.c_str(), modChecksum.c_str());
     
     hostModName = modName;
     hostModChecksum = modChecksum;
-    
+    if(!gameInitSettings.getModRevisionHash().empty()) {
+        if(!WorkshopGameContent::announcesRevision(modName, gameInitSettings)) {
+            onConfigMismatch(_("The host announced a different mod from the selected revision."));
+            if(pNetworkManager) pNetworkManager->sendModAck(false, "");
+            return;
+        }
+        if(!WorkshopGameContent::matches(gameInitSettings)) {
+#ifdef __EMSCRIPTEN__
+            // The host has published before sending setup. Resolve through the
+            // content service first, which also supports packages over the peer
+            // transfer limit. Call only after lobby callbacks are installed.
+            if(!communityModDownloadAttempted) {
+                communityModDownloadAttempted = true;
+                communityModDownloadInProgress = true;
+                try { WorkshopGameContent::resolveMod(gameInitSettings); }
+                catch(const std::exception&) { /* Retain the bounded peer fallback. */ }
+                communityModDownloadInProgress = false;
+                if(WorkshopGameContent::matches(gameInitSettings)) {
+                    if(ModManager::instance().getEffectiveChecksums().combined != modChecksum) {
+                        onConfigMismatch(_("The host announced a different checksum from the selected revision."));
+                        if(pNetworkManager) pNetworkManager->sendModAck(false, "");
+                    } else {
+                        rebuildAfterModTransfer = true;
+                        quit();
+                    }
+                    return;
+                }
+            }
+#endif
+            if(pNetworkManager && pNetworkManager->supportsModTransfer()) {
+                bModDownloadInProgress = true;
+                addInfoMessage(_("Receiving the exact mod version from the host..."));
+                pNetworkManager->requestModDownload(modName);
+            } else {
+                onConfigMismatch(_("The downloaded mod does not match the host's exact revision."));
+                if(pNetworkManager) pNetworkManager->sendModAck(false, "");
+            }
+            return;
+        }
+    }
+    bModDownloadInProgress = false;
+
     // Compare with our local mod
     std::string localModName = ModManager::instance().getActiveModName();
     std::string localChecksum = ModManager::instance().getEffectiveChecksums().combined;
@@ -1102,10 +1326,12 @@ void CustomGamePlayers::onReceiveModInfo(const std::string& modName, const std::
     
     if(modName == localModName && modChecksum == localChecksum) {
         SDL_Log("CLIENT: Mod checksums match!");
-        addInfoMessage("Mod verified: " + modName);
+        addInfoMessage(_("Mod verified: ") + ModManager::instance().getModInfo(modName).displayName
+            + (gameInitSettings.getModRevisionVersion() ? " v" + std::to_string(gameInitSettings.getModRevisionVersion()) : ""));
         
         // Send ACK to host - checksums match, ready to start
         if(pNetworkManager != nullptr) {
+            pNetworkManager->sendConfigHash(getQuantBotConfig().getConfigHash(), getObjectDataHash(), VERSIONSTRING);
             pNetworkManager->sendModAck(true, localChecksum);
         }
         return;
@@ -1129,6 +1355,7 @@ void CustomGamePlayers::onReceiveModInfo(const std::string& modName, const std::
             // Update the mod label on screen
             ModInfo activeModInfo = ModManager::instance().getModInfo(modName);
             mapPropertyMod.setText(activeModInfo.displayName);
+            mapPropertyCity.setText(activeModInfo.enablesCityMode ? _("On") : _("Off"));
             
             // Reload effective game options for the new mod
             effectiveGameOptions = ModManager::instance().loadEffectiveGameOptions(settings.gameOptions);
@@ -1139,6 +1366,7 @@ void CustomGamePlayers::onReceiveModInfo(const std::string& modName, const std::
                 addInfoMessage("Switched to mod: " + modName);
                 
                 if(pNetworkManager != nullptr) {
+                    pNetworkManager->sendConfigHash(getQuantBotConfig().getConfigHash(), getObjectDataHash(), VERSIONSTRING);
                     pNetworkManager->sendModAck(true, newChecksum);
                 }
                 return;
@@ -1207,6 +1435,7 @@ void CustomGamePlayers::onModDownloadComplete(bool success, const std::string& d
         
         // Set mismatch flag to prevent game start
         bConfigMismatchDetected = true;
+        if(pNetworkManager) pNetworkManager->sendModAck(false, "");
         return;
     }
     
@@ -1228,7 +1457,12 @@ void CustomGamePlayers::onModDownloadComplete(bool success, const std::string& d
         SDL_Log("CLIENT: Mod '%s' saved successfully", hostModName.c_str());
         
         // Switch to the new mod
-        if(ModManager::instance().setActiveMod(hostModName)) {
+        const bool activated = gameInitSettings.getModRevisionHash().empty()
+            ? ModManager::instance().setActiveMod(hostModName)
+            : (hostModName == "ws-" + gameInitSettings.getModRevisionHash()
+               && Workshop::activateModRevision(gameInitSettings.getModRevisionHash())
+               && WorkshopGameContent::matches(gameInitSettings));
+        if(activated) {
             // Reload effective game options
             effectiveGameOptions = ModManager::instance().loadEffectiveGameOptions(settings.gameOptions);
             
@@ -1239,12 +1473,19 @@ void CustomGamePlayers::onModDownloadComplete(bool success, const std::string& d
             // Update the mod label on screen to show the new mod
             ModInfo activeModInfo = ModManager::instance().getModInfo(hostModName);
             mapPropertyMod.setText(activeModInfo.displayName);
+            mapPropertyCity.setText(activeModInfo.enablesCityMode ? _("On") : _("Off"));
             
             SDL_Log("CLIENT: Switched to mod '%s', new checksum: %s", hostModName.c_str(), newChecksum.c_str());
 
             if(newChecksum == hostModChecksum) {
+                if(waitingForModInstall) {
+                    rebuildAfterModTransfer = true;
+                    quit();
+                    return;
+                }
                 addInfoMessage("Mod '" + hostModName + "' synced successfully!");
                 if(pNetworkManager != nullptr) {
+                    pNetworkManager->sendConfigHash(getQuantBotConfig().getConfigHash(), getObjectDataHash(), VERSIONSTRING);
                     pNetworkManager->sendModAck(true, newChecksum);
                 }
             } else {
@@ -1365,12 +1606,20 @@ void CustomGamePlayers::checkAllClientsReady() {
     }
     
     if(allReady) {
+        std::string contentError;
+        const auto content = pNetworkManager->checkRelayContent(getQuantBotConfig().getConfigHash(),
+            getObjectDataHash(), VERSIONSTRING, contentError);
+        if(content != NetworkManager::ContentCheck::Match) {
+            if(content == NetworkManager::ContentCheck::Mismatch) onConfigMismatch(contentError);
+            else addInfoMessage(contentError);
+            return;
+        }
         SDL_Log("HOST: All %zu clients ready! Starting game...", connectedPlayers.size());
         addInfoMessage("All clients synced - starting game!");
         bWaitingForModAcks = false;
         
         // Now actually start the game
-        unsigned int timeLeft = 3000;  // 3 seconds countdown
+        unsigned int timeLeft = startImmediately ? 1 : 3000;  // Lobby hosts keep their countdown.
         if(!pNetworkManager->sendStartGame(timeLeft)) {
             addInfoMessage("The match could not start because a player disconnected or was not ready.");
             return;
@@ -1458,26 +1707,18 @@ void CustomGamePlayers::updateDiscordGameStarting() {
 
 void CustomGamePlayers::onNext()
 {
+    if(!WorkshopGameContent::matches(gameInitSettings)) {
+        onConfigMismatch(_("The selected mod revision changed. Reopen the lobby to share the updated version."));
+        return;
+    }
     if(setup && setup->online) {
-        bool hasOpenSeat = false;
-        for(int i = 0; i < numHouses; ++i) {
-            hasOpenSeat |= houseInfo[i].player1DropDown.getSelectedEntryIntData() == PLAYER_OPEN;
-            if(gameInitSettings.isMultiplePlayersPerHouse())
-                hasOpenSeat |= houseInfo[i].player2DropDown.getSelectedEntryIntData() == PLAYER_OPEN;
-        }
-        if(!hasOpenSeat) {
-            openWindow(MsgBox::create(_("Choose Open for a player slot before creating an online lobby.\nLeave a place for another player to join.")));
-            return;
-        }
         setup->players = getChangeEventList();
         quit(MENU_SETUP_HOST);
         return;
     }
     if(isCoopGameType(gameInitSettings.getGameType())
-       && (houseInfo[0].player1DropDown.getSelectedEntryIntData() != PLAYER_HUMAN
-           || houseInfo[0].player2DropDown.getSelectedEntryIntData() == PLAYER_OPEN
-           || houseInfo[0].player2DropDown.getSelectedEntryIntData() == PLAYER_CLOSED)) {
-        openWindow(MsgBox::create(_("Wait for your co-op partner, or select a QuantBot.")));
+       && houseInfo[0].player1DropDown.getSelectedEntryIntData() != PLAYER_HUMAN) {
+        openWindow(MsgBox::create(_("Choose a human player to lead the campaign.")));
         return;
     }
     // check if we have at least two houses on the map and if we have more than one team
@@ -1672,6 +1913,10 @@ void CustomGamePlayers::addAllPlayersToGameInitSettings()
                 if(fixed.houseID == houseID) colorOfHouse = fixed.colorOfHouse;
         }
         GameInitSettings::HouseInfo newHouseInfo((HOUSETYPE) houseID, team);
+        if(duneCitySkinControls) {
+            newHouseInfo.graphicsSkin = GameInitSettings::sanitizeGraphicsSkin(
+                curHouseInfo.graphicsSkinDropDown.getSelectedEntryIntData());
+        }
         colorOfHouse = resolveSelectedColorSlot(colorOfHouse, houseID);
         if(isValidHouseColorSlot(colorOfHouse)) {
             newHouseInfo.colorOfHouse = colorOfHouse;
@@ -1746,6 +1991,7 @@ void CustomGamePlayers::onSendChatMessage()
 }
 
 void CustomGamePlayers::addInfoMessage(const std::string& message) {
+    if(startImmediately) launchStatus.setText(message);
     std::string text = chatTextView.getText();
     if(text.length() > 0) {
         text += "\n";
@@ -1872,7 +2118,9 @@ void CustomGamePlayers::extractMapInfo(INIFile* pMap)
         currentIndex++;
     }
 
-    for(int p = 0; (p < numHouses) && (currentIndex < numHouses); p++) {
+    // PlayerN sections may have gaps (Ergsun-Odenkirk uses 1, 2, 3, 5).
+    // Scan the same capacity used to count them, not just the visible row count.
+    for(int p = 0; (p < getCustomGameHouseCount()) && (currentIndex < numHouses); p++) {
         if(pMap->hasSection("Player" + std::to_string(p+1))) {
             std::string teamName = strToUpper(pMap->getStringValue("Player" + std::to_string(p+1),"Brain","Team " + std::to_string(currentIndex+p+1)));
             teamNames.push_back(teamName);
@@ -2048,6 +2296,20 @@ void CustomGamePlayers::onChangeColorDropDownBoxes(bool bInteractive, int houseI
     }
 }
 
+void CustomGamePlayers::onChangeGraphicsSkinDropDownBoxes(bool bInteractive, int houseInfoNum) {
+    if(!duneCitySkinControls || houseInfoNum < 0 || houseInfoNum >= numHouses) {
+        return;
+    }
+    if(bInteractive && pNetworkManager != nullptr) {
+        const int selectedSkin = houseInfo[houseInfoNum].graphicsSkinDropDown.getSelectedEntryIntData();
+        ChangeEventList changeEventList;
+        changeEventList.changeEventList.emplace_back(
+            ChangeEventList::ChangeEvent::EventType::ChangeGraphicsSkin,
+            houseInfoNum, selectedSkin);
+        pNetworkManager->sendChangeEventList(changeEventList);
+    }
+}
+
 void CustomGamePlayers::onBonusColorCheckbox(int houseInfoNum) {
     if(houseInfoNum < 0 || houseInfoNum >= numHouses) {
         return;
@@ -2177,6 +2439,11 @@ void CustomGamePlayers::onPeerDisconnected(const std::string& playername, bool b
 }
 
 void CustomGamePlayers::onStartGame(unsigned int timeLeft) {
+    if(bModDownloadInProgress) return;
+    if(!WorkshopGameContent::matches(gameInitSettings)) {
+        onConfigMismatch(_("The required mod revision changed before the game started."));
+        return;
+    }
     // Don't start if there was a config mismatch
     if(bConfigMismatchDetected) {
         SDL_Log("Ignoring STARTGAME packet - config mismatch already detected");
@@ -2271,6 +2538,7 @@ void CustomGamePlayers::setPlayer2Slot(const std::string& playername, int slot) 
             houseInfo[i].teamDropDown.setEnabled(bIsThisPlayer);
             houseInfo[i].bonusColorCheckbox.setEnabled(bIsThisPlayer);
             houseInfo[i].colorDropDown.setEnabled(bIsThisPlayer);
+            houseInfo[i].graphicsSkinDropDown.setEnabled(duneCitySkinControls && bIsThisPlayer);
         }
     }
 
@@ -2437,6 +2705,8 @@ void CustomGamePlayers::disableAllDropDownBoxes() {
         curHouseInfo.bonusColorCheckbox.setEnabled(false);
         curHouseInfo.colorDropDown.setEnabled(false);
         curHouseInfo.colorDropDown.setOnClickEnabled(false);
+        curHouseInfo.graphicsSkinDropDown.setEnabled(false);
+        curHouseInfo.graphicsSkinDropDown.setOnClickEnabled(false);
         curHouseInfo.player1DropDown.setEnabled(false);
         curHouseInfo.player1DropDown.setOnClickEnabled(false);
         curHouseInfo.player2DropDown.setEnabled(false);

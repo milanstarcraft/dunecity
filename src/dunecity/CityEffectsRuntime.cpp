@@ -2,6 +2,7 @@
 #include <units/UnitBase.h>
 #include <dunecity/PoliceCoveragePolicy.h>
 #include <players/AIDecisionLog.h>
+#include <players/Player.h>
 #include <dunecity/CityTrafficPolicy.h>
 /*
  *  CityEffectsRuntime.cpp
@@ -27,12 +28,15 @@
 #include <Tile.h>
 #include <House.h>
 #include <structures/StructureBase.h>
+#include <structures/BuilderBase.h>
 #include <structures/ZoneStructure.h>
 
 #include <SDL2/SDL_log.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdlib>
+#include <limits>
 #include <vector>
 
 // --- Per-house getter implementations ---
@@ -43,15 +47,6 @@ static int localHouseID() {
 }
 
 namespace DuneCity {
-
-const HouseCityState& CitySimulation::getHouseState(int houseID) const {
-    if (houseID < 0 || houseID >= kMaxCityHouses) houseID = 0;
-    return houseState_[houseID];
-}
-HouseCityState& CitySimulation::getHouseStateMut(int houseID) {
-    if (houseID < 0 || houseID >= kMaxCityHouses) houseID = 0;
-    return houseState_[houseID];
-}
 
 int CitySimulation::getResPop() const { return getHouseState(localHouseID()).resPop; }
 int CitySimulation::getComPop() const { return getHouseState(localHouseID()).comPop; }
@@ -854,6 +849,42 @@ void CitySimulation::runZoneGrowth() {
         }
     }
 
+    // One shared budget per house, updated after each node. Multiple growing
+    // lots in the same scan must not each spend the same remaining population.
+    std::array<int, kMaxCityHouses> cityPopulation{};
+    std::array<int, kMaxCityHouses> cityLimits{};
+    for(int h=0; h<kMaxCityHouses; ++h) {
+        const auto* house = currentGame->getHouse(static_cast<HOUSETYPE>(h));
+        if(!house) continue;
+        for(const auto& player : house->getPlayerList()) {
+            const int limit = player->getCityPopulationLimit(map.getSizeX()*map.getSizeY());
+            // A helper's construction ceiling must not cap its human partner's
+            // natural city growth. Human and other unrestricted controllers
+            // keep the whole house's natural growth unrestricted.
+            if(limit <= 0) { cityLimits[h]=0; break; }
+            cityLimits[h] = cityLimits[h] ? std::min(cityLimits[h],limit) : limit;
+        }
+    }
+    for(const auto& n : nodes) {
+        const int h = n.pStruct->getOwner()->getHouseID();
+        cityPopulation[h] += getStructurePopulation(n.pStruct,n.level)
+            + (n.pStruct->getItemID()==Structure_Palace ? getPalaceCommercialPopulation(n.level) : 0);
+    }
+
+    // Reserve initial population for orders already accepted by construction
+    // yards, so natural growth cannot spend the space before placement occurs.
+    for(const auto* structure : structureList) {
+        const auto* builder = dynamic_cast<const BuilderBase*>(structure);
+        if(!builder || builder->getProductionQueueSize()==0) continue;
+        const int h=builder->getOwner()->getHouseID();
+        if(cityLimits[h]<=0) continue;
+        for(const auto& queued : builder->getBuildList()) {
+            if(!isStructure(queued.itemID)) continue;
+            cityPopulation[h] += queued.num * (getZonePopulation(queued.itemID,1)
+                + (queued.itemID==Structure_Palace ? getPalaceCommercialPopulation(1) : 0));
+        }
+    }
+
     // Global supply totals (all players) — used in growth loop employment tracking
     int totalResidentialSupply = 0;
     int totalJobSupply = 0;
@@ -990,6 +1021,17 @@ void CitySimulation::runZoneGrowth() {
             ? ResidentialPopulation::grow(initialPopulation,populationDensityMap_.worldGet(pos.x,pos.y)) : 0;
         const int targetLevel = residentialLot ? ResidentialPopulation::density(nextResidentialPopulation) : n.level+1;
 
+        const int ownerHouse = n.pStruct->getOwner()->getHouseID();
+        const int palaceBefore = n.pStruct->getItemID()==Structure_Palace
+            ? getPalaceCommercialPopulation(initialLevel) : 0;
+        const int proposedPopulation = residentialLot ? nextResidentialPopulation
+            : getZonePopulation(n.pStruct->getItemID(),targetLevel);
+        const int palaceAfter = n.pStruct->getItemID()==Structure_Palace
+            ? getPalaceCommercialPopulation(targetLevel) : 0;
+        const bool withinCityLimit = cityLimits[ownerHouse] <= 0
+            || (static_cast<int64_t>(cityPopulation[ownerHouse]) + proposedPopulation
+                + palaceAfter - initialPopulation - palaceBefore) * kPopDisplayMultiplier <= cityLimits[ownerHouse];
+
         // Local supply within kSupplyRadius — summed from spatial grid blocks.
         int localComm = 0, localInd = 0, localRes = 0;
         {
@@ -1082,7 +1124,7 @@ void CitySimulation::runZoneGrowth() {
 
         // --- Growth attempt: requires zscore above threshold ---
         if (zscore > kZscoreGrowthGate && (residentialLot ? nextResidentialPopulation > initialPopulation : n.level < n.maxLevel)
-            && growthRolled && !pollutionBlocked) {
+            && growthRolled && !pollutionBlocked && withinCityLimit) {
             const int lvFloor = getDemandLandValueFloor(std::max(1,targetLevel));
             if (landValue >= lvFloor) {
                 bool meets = false;
@@ -1235,6 +1277,8 @@ void CitySimulation::runZoneGrowth() {
             }
         }
         const int finalPopulation = getStructurePopulation(n.pStruct,n.level);
+        cityPopulation[ownerHouse] += finalPopulation - initialPopulation
+            + (n.pStruct->getItemID()==Structure_Palace ? getPalaceCommercialPopulation(n.level) : 0) - palaceBefore;
         const bool populationChanged = finalPopulation != initialPopulation;
         // Observe the decision without changing its rolls, score or ordering.
         if (AITelemetry::log().enabled() && (populationChanged || lastProcessedDay_ % 96u == 0)) {
@@ -1264,7 +1308,8 @@ void CitySimulation::runZoneGrowth() {
                     .set("pollution_blocked",pollutionBlocked).set("pollution_slowed",pollutionSlowed)
                     .set("growth_roll",roll).set("growth_roll_passed",growthRolled).set("score_satisfied",zscore>kZscoreGrowthGate)
                     .set("at_max_level",initialLevel>=n.maxLevel).set("population_before",initialPopulation)
-                    .set("population_after",finalPopulation));
+                    .set("population_after",finalPopulation).set("ai_population_limit",cityLimits[ownerHouse])
+                    .set("ai_population_budget_available",withinCityLimit));
         }
     }
 
@@ -1435,7 +1480,7 @@ void CitySimulation::runDailyBudget() {
     if (!currentGameMap) return;
     const Map& map = *currentGameMap;
 
-    // One map walk collects the tax base and police costs. Roads have no upkeep.
+    // One structure walk collects the tax base and police costs. Roads have no upkeep.
     // All annual amounts are paid fractionally over kBudgetTicksPerYear.
     for (auto& hs : houseState_) {
         hs.taxBaseEighths = 0;
@@ -1443,6 +1488,7 @@ void CitySimulation::runDailyBudget() {
     struct HouseBudget {
         int taxBaseEighths = 0;
         FixPoint policeCost = 0;
+        int firstOrigin = std::numeric_limits<int>::max();
     };
     std::vector<std::pair<House*, HouseBudget>> houseBudgets;
 
@@ -1462,6 +1508,7 @@ void CitySimulation::runDailyBudget() {
         const Tile* t = map.getTile(x, y);
         const int itemID = pStruct->getItemID();
         HouseBudget& hb = findOrAdd(owner);
+        hb.firstOrigin=std::min(hb.firstOrigin,y*map.getSizeX()+x);
 
         if (getStructureCityRole(itemID) != CityRole::None) {
             const int level = cityLevelOf(t, pStruct);
@@ -1469,18 +1516,20 @@ void CitySimulation::runDailyBudget() {
         }
         hb.policeCost += getPoliceAnnualCost(itemID);
     };
-    for (int y = 0; y < map.getSizeY(); ++y) {
-        for (int x = 0; x < map.getSizeX(); ++x) {
-            const Tile* tile = map.getTile(x, y);
-            if (!tile) continue;
-            if (!tile->hasANonInfantryGroundObject()) continue;
-            const ObjectBase* object = tile->getNonInfantryGroundObject();
-            if (!object || !object->isAStructure()) continue;
-            const auto* structure = static_cast<const StructureBase*>(object);
-            if (structure->getLocation().x == x && structure->getLocation().y == y)
-                accumulateStructure(x, y, structure);
-        }
+    for (const auto* structure : structureList) {
+        const auto location=structure->getLocation();
+        if (!map.tileExists(location)) continue;
+        const auto* tile=map.getTile(location);
+        // Preserve the map-origin filter, including structures removed from
+        // the map but not yet removed from the global list.
+        if (tile->hasANonInfantryGroundObject() && tile->getNonInfantryGroundObject()==structure)
+            accumulateStructure(location.x,location.y,structure);
     }
+    // Integer/fixed-point sums are order-independent; keep the old row-major
+    // house payout/log order by remembering each house's first origin.
+    std::sort(houseBudgets.begin(),houseBudgets.end(),[](const auto& a,const auto& b) {
+        return a.second.firstOrigin<b.second.firstOrigin;
+    });
 
     for (auto& [house, hb] : houseBudgets) {
         // Annual values divided by cycles-per-year for smooth payout.
@@ -1498,6 +1547,9 @@ void CitySimulation::runDailyBudget() {
         const FixPoint tickPaid    = FixPoint(annualPaid)    / kBudgetTicksPerYear;
         const FixPoint net = tickRevenue - tickPaid;
 
+        // Gross receipts are the debriefing statistic: record them before the
+        // police charge, the credit cap or any later spending touch the balance.
+        house->addCityTaxReceipts(tickRevenue);
         house->addCityCredits(tickRevenue - tickPaid);
         AITelemetry::log().account(hID, "city_gross", tickRevenue.getRawValue());
         AITelemetry::log().account(hID, "police_charged", tickPaid.getRawValue());

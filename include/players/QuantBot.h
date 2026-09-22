@@ -27,6 +27,7 @@
 #include <units/MCV.h>
 class Harvester;
 #include <players/QuantBotConfig.h>
+#include <players/QuantBotCityCampaignPolicy.h>
 #include <players/CampaignDifficultyPolicy.h>
 #include <players/AIDecisionLog.h>
 
@@ -58,9 +59,12 @@ public:
     void init();
     ~QuantBot();
     void save(OutputStream& stream) const override;
+    void saveObserverRuntime(OutputStream& stream) const;
+    void loadObserverRuntime(InputStream& stream);
 
     void update() override;
     void onHumanUnitOrder(Uint32 id);
+    void onScriptedReinforcement(const UnitBase* unit);
     void finishTelemetry() override;
     void onCombatReward(Uint32 attacker, Uint32 target, const CombatReward::Totals& reward) override;
 
@@ -69,6 +73,21 @@ public:
     const std::array<int, 8>& getLastUnitMixBps() const { return lastUnitMixBps; }
     std::string getDifficultyName() const;
     bool permitsPoliceReinforcement(int unitValue) const;
+    bool ignoresUnitCountLimit() const { return difficulty==Difficulty::Hard || difficulty==Difficulty::Brutal; }
+    bool isAlliedWithHuman() const;
+    int harvesterCountCeiling() const;
+    int getCityPopulationLimit(int mapArea) const override;
+    int campaignAllyHarvesterLimit() const;
+    bool canAddRepairYard(int includingQueued) const;
+
+    // Only opposing QuantBots in Dune City campaigns use this policy.
+    QuantBotCityCampaignPolicy::Limits campaignCityLimits() const;
+    bool campaignCityEconomy() const;
+    bool campaignPermitsStructure(Uint32 itemID) const;
+    bool campaignAllowsZone(int zonesIncludingQueued) const;
+    bool campaignCanAddHarvester() const;
+    int campaignHarvesterCeiling() const; // -1 outside policy; zero forbids new workers
+    void doProduceItem(const BuilderBase* builder, Uint32 itemID) const;
 
     void onObjectWasBuilt(const ObjectBase* pObject) override;
     void onDecrementStructures(int itemID, const Coord& location) override;
@@ -123,13 +142,25 @@ private:
     std::map<Uint32, Uint32> manualUnitOrders, defenceAssignments;
     void launchGroundHunt();
     CampaignDifficultyPolicy::Wave campaignWave;
+    std::set<Uint32> scriptedAssaults;
     bool isCampaignEnemy() const;
-    std::vector<const QuantBot*> campaignAlliance() const;
+    QuantBotCityCampaignPolicy::Baseline campaignBaseline;
+    std::set<Uint32> campaignOriginalStructures;
+    bool campaignBaselineCaptured = false;
+    bool campaignMapHasSpice = true;
+    Uint32 campaignSpiceZeroSince = std::numeric_limits<Uint32>::max();
+    void noteCampaignOriginalState(bool legacySave = false);
+    int campaignIncomeForecastPerMinute() const;
+    int campaignCommittedCount(Uint32 itemID) const;
+    int campaignHarvesterTarget() const;
+    bool campaignPostSpice() const;
+    bool campaignAvailableToBuild(const BuilderBase* builder, Uint32 itemID) const;
     CampaignDifficultyPolicy::Profile campaignProfile() const;
     CampaignDifficultyPolicy::Pressure campaignPressure() const;
     bool campaignCanLaunch() const;
     int campaignRequiredArmy(int configuredThreshold) const;
     bool campaignCombatUnit(const UnitBase* unit) const;
+    bool reserveDamagedUnitForRepair(const UnitBase* unit) const;
     bool campaignLocalContact(const ObjectBase* target) const;
     bool campaignDefensiveContact(const UnitBase* unit, const ObjectBase* target) const;
     bool campaignControlsUnit(const UnitBase* unit);
@@ -184,7 +215,7 @@ private:
     std::unordered_map<Uint32,Uint32> mcvSurveyCycles;
     Coord findPlaceLocation(Uint32 itemID);
     bool preservesGroundAccess(Uint32 item, Coord pos);
-    void clearPlacementCache(bool geometryChanged = true);
+    void clearPlacementCache(bool geometryChanged = true, bool reuseForBuilder = false);
     Coord findRedevelopmentSite(Uint32 itemID);
     bool redevelopmentZones(Uint32 itemID, Coord pos, std::vector<Uint32>& zones) const;
     Coord findPlaceLocationSimple(Uint32 itemID);
@@ -196,7 +227,9 @@ private:
                                       int* crimeBenefit = nullptr, int* crimeHotspot = nullptr);
 
     Coord findEffectiveTurretPlaceLocation(Uint32 itemID);
-    Coord findSquadCenter(int houseID);
+    // preferHunting=false returns the body at home instead of the attack
+    // centroid, for troops that must not be dragged towards the front.
+    Coord findSquadCenter(int houseID, bool preferHunting = true);
     Coord findBaseCentre(int houseID);
     Coord findBestDeathHandTarget(int enemyHouseID);
     const UnitBase* findLightRaiderTarget(const UnitBase* raider) const;
@@ -226,6 +259,9 @@ private:
     std::map<Uint32, std::list<Coord>> builderPlaceLocations;
     struct PlannedStructure { Uint32 item; Coord location; };
     std::map<Uint32, PlannedStructure> reservedStructures;
+    // Recomputed every planning pass; zoning leaves two usable production plots.
+    std::vector<PlannedStructure> cityProductionPlots;
+    bool planningCityProductionPlots = false;
     struct RecentStructureLoss { Coord location; Coord size; Uint32 cycle; Uint32 item; };
     std::vector<int> tacticalDanger, harvesterDanger, lossDanger, factoryEnemyClearance;
     std::vector<Coord> visibleEnemyBases;
@@ -249,6 +285,7 @@ private:
     bool overlapsReservedStructure(int x, int y, int width, int height) const;
     OrnithopterStrikeTeam ornithopterStrikeTeam;
     std::unordered_map<Uint32, Coord> placementCache; ///< Per-build-cycle cache for findPlaceLocation results
+    Uint32 placementCacheExcludedBuilder = NONE_ID;
 
     struct CityServiceSite {
         Coord site = Coord::Invalid();

@@ -28,6 +28,7 @@
 #include <Network/NetworkPacketPolicy.h>
 #include <Network/NetworkPacketTypes.h>
 #include <Network/PathBudgetSync.h>
+#include <Network/ObserverStreamPolicy.h>
 #include <mod/ModTransferValidation.h>
 
 #include <enet/enet.h>
@@ -38,6 +39,24 @@
 #include <list>
 #include <string>
 #include <vector>
+
+TEST_CASE("Spectator checkpoint window accepts cumulative progress without trusting unsent offsets", "[network][spectator]") {
+    using namespace ObserverStreamPolicy;
+    const auto total=5*chunkBytes+17;
+    CHECK(canSendChunk(0,3*chunkBytes,total));
+    CHECK_FALSE(canSendChunk(0,4*chunkBytes,total));
+    CHECK(validChunkAck(0,4*chunkBytes,total,chunkBytes));
+    CHECK(canSendChunk(chunkBytes,4*chunkBytes,total));
+    CHECK(validChunkAck(chunkBytes,4*chunkBytes,total,4*chunkBytes));
+    CHECK_FALSE(validChunkAck(chunkBytes,4*chunkBytes,total,chunkBytes));
+    CHECK_FALSE(validChunkAck(chunkBytes,4*chunkBytes,total,0));
+    CHECK_FALSE(validChunkAck(chunkBytes,4*chunkBytes,total,5*chunkBytes));
+    CHECK_FALSE(validChunkAck(0,4*chunkBytes,total,chunkBytes+1));
+    CHECK_FALSE(validChunkAck(0,~std::uint32_t(0),total,chunkBytes));
+    CHECK(validChunkAck(5*chunkBytes,total,total,total));
+    CHECK_FALSE(canSendChunk(total,total,total));
+    CHECK_FALSE(canSendChunk(chunkBytes,0,total));
+}
 
 using NetworkPacketPolicy::LocalRole;
 using NetworkPacketPolicy::PacketContext;
@@ -156,7 +175,7 @@ TEST_CASE("Admission: a peer that has not completed the handshake can only drive
 
 TEST_CASE("Admission: a connection without peer state is never obeyed",
           "[network][security][admission]") {
-    for(Uint32 packetType = 0; packetType <= NETWORKPACKET_COOP_MISSION; packetType++) {
+    for(Uint32 packetType = 0; packetType <= NETWORKPACKET_JOIN_ACK; packetType++) {
         const PacketVerdict verdict = NetworkPacketPolicy::classifyPacket(
             context(packetType, LocalRole::Client, SessionPhase::Lobby,
                     PeerAdmission::Unidentified, true));
@@ -170,7 +189,7 @@ TEST_CASE("Admission: host-only control messages are refused from a peer that is
     const Uint32 hostOnlyPackets[] = {
         NETWORKPACKET_STARTGAME, NETWORKPACKET_SETPATHBUDGET, NETWORKPACKET_CONNECT,
         NETWORKPACKET_DISCONNECT, NETWORKPACKET_SENDGAMEINFO, NETWORKPACKET_COOP_MISSION,
-        NETWORKPACKET_MOD_INFO, NETWORKPACKET_MOD_CHUNK, NETWORKPACKET_MOD_COMPLETE
+        NETWORKPACKET_MOD_INFO, NETWORKPACKET_MOD_CHUNK, NETWORKPACKET_MOD_COMPLETE, NETWORKPACKET_JOIN_SYNC
     };
 
     for(const Uint32 packetType : hostOnlyPackets) {
@@ -270,7 +289,7 @@ TEST_CASE("Admission: in-game traffic is refused while still in the lobby",
 }
 
 TEST_CASE("Admission: unknown packet types are refused", "[network][security][admission]") {
-    for(const Uint32 packetType : {0u, 21u, 999u, 0xFFFFFFFFu}) {
+    for(const Uint32 packetType : {0u, 25u, 999u, 0xFFFFFFFFu}) {
         INFO("packet type " << packetType);
         REQUIRE(NetworkPacketPolicy::classifyPacket(
                     context(packetType, LocalRole::Client, SessionPhase::Lobby,
@@ -780,6 +799,22 @@ TEST_CASE_METHOD(ENetRuntime, "Lobby: a normal change event list round-trips",
     REQUIRE(iter->newStringValue == "stefan");
 }
 
+TEST_CASE_METHOD(ENetRuntime, "Lobby: graphics skin changes round-trip",
+                 "[network][security][lobby][skins]") {
+    ChangeEventList original;
+    original.changeEventList.emplace_back(
+        ChangeEventList::ChangeEvent::EventType::ChangeGraphicsSkin, 1u, 1u);
+    ENetPacketOStream out(ENET_PACKET_FLAG_RELIABLE);
+    original.save(out);
+    ENetPacketIStream in(out.getPacket());
+    ChangeEventList decoded(in);
+    REQUIRE(decoded.changeEventList.size() == 1);
+    const auto& event = decoded.changeEventList.front();
+    REQUIRE(event.eventType == ChangeEventList::ChangeEvent::EventType::ChangeGraphicsSkin);
+    REQUIRE(event.slot == 1);
+    REQUIRE(event.newValue == 1);
+}
+
 TEST_CASE_METHOD(ENetRuntime, "Lobby: malformed change event lists are refused",
                  "[network][security][lobby]") {
     SECTION("event count near the 32 bit maximum") {
@@ -1156,7 +1191,7 @@ TEST_CASE("Command authorization: every object action is covered, control comman
 
     // Commands that carry no acting object: they are authorized by issuer identity alone.
     const CMDTYPE nonObjectCommands[] = {
-        CMD_PLAYER_PAUSE, CMD_PLAYER_RESUME, CMD_TEST_SYNC, CMD_HOUSE_AUTO_REPAIR, CMD_CAMPAIGN_SKIP,
+        CMD_PLAYER_PAUSE, CMD_PLAYER_RESUME, CMD_TEST_SYNC, CMD_HOUSE_AUTO_REPAIR, CMD_CAMPAIGN_SKIP, CMD_MATCH_PAUSE,
         CMD_CITY_PLACE_ZONE, CMD_CITY_SET_TAX_RATE, CMD_CITY_SET_BUDGET, CMD_CITY_TOOL
     };
     for(const CMDTYPE commandID : nonObjectCommands) {
@@ -1335,6 +1370,19 @@ TEST_CASE("Lobby authorization: house settings are restricted to the sender's ow
                 == LobbyDecision::RejectNotYourHouse);
         REQUIRE(judge(lobby, "stefan", houseChange(EventType::ChangeColor, 3, 1))
                 == LobbyDecision::RejectNotYourHouse);
+    }
+
+    SECTION("skin choices follow the same house ownership rules") {
+        REQUIRE(judge(lobby, "stefan", houseChange(EventType::ChangeGraphicsSkin, 1, 1))
+                == LobbyDecision::Allow);
+        REQUIRE(judge(lobby, "quix", houseChange(EventType::ChangeGraphicsSkin, 1, 0))
+                == LobbyDecision::Allow);
+        REQUIRE(judge(lobby, "stefan", houseChange(EventType::ChangeGraphicsSkin, 0, 1))
+                == LobbyDecision::RejectNotYourHouse);
+        REQUIRE(judge(lobby, "intruder", houseChange(EventType::ChangeGraphicsSkin, 1, 1))
+                == LobbyDecision::RejectUnknownSender);
+        REQUIRE(judge(lobby, "stefan", houseChange(EventType::ChangeGraphicsSkin, 4, 1))
+                == LobbyDecision::RejectSlotOutOfRange);
     }
 
     SECTION("changing the partner slot of the sender's own house is allowed") {
@@ -1698,4 +1746,47 @@ TEST_CASE("Feedback submissions preserve text and restrict returned issue links"
     REQUIRE_THROWS_AS(FeedbackIssue::fields("id", " ", "Details", ""), std::invalid_argument);
     REQUIRE_THROWS_AS(FeedbackIssue::fields("id", "Title", "\n\t", ""), std::invalid_argument);
     REQUIRE_THROWS_AS(FeedbackIssue::fields("id", "Title", std::string(8001, '#'), ""), std::invalid_argument);
+}
+
+#include <Network/LateJoinPolicy.h>
+TEST_CASE("Late join request queues are bounded and require a complete unique envelope", "[network][latejoin]") {
+    std::vector<LateJoinPolicy::Request> result;
+    const auto entry="request="+std::string(64,'a')+"|"+RoomAdmission::hexText("New player")+"\n";
+    REQUIRE(LateJoinPolicy::parseQueue("status=ok\nprotocol=1\n"+entry,result));
+    REQUIRE(result.size()==1);
+    REQUIRE(result[0].name=="New player");
+    REQUIRE_FALSE(result[0].spectator);
+    const auto prefix="status=ok\nprotocol=1\nrequest="+std::string(64,'b')+"|"+RoomAdmission::hexText("Observer");
+    REQUIRE(LateJoinPolicy::parseQueue(prefix+"|spectator\n",result));
+    REQUIRE(result[0].spectator);
+    REQUIRE_FALSE(LateJoinPolicy::parseQueue(prefix+"|admin\n",result));
+    REQUIRE_FALSE(LateJoinPolicy::parseQueue(prefix+"|spectator|player\n",result));
+    REQUIRE_FALSE(LateJoinPolicy::parseQueue("status=ok\n"+entry,result));
+    REQUIRE_FALSE(LateJoinPolicy::parseQueue("status=ok\nprotocol=1\n"+entry+entry,result));
+    REQUIRE_FALSE(LateJoinPolicy::parseQueue("status=ok\nprotocol=1\nstatus=ok\n",result));
+    REQUIRE_FALSE(LateJoinPolicy::parseQueue("junkstatus=ok\nprotocol=1\n",result));
+}
+TEST_CASE("Running discovery carries map mod and elapsed time without admitting a player", "[network][latejoin]") {
+    PublicRelayGame game;
+    const auto row="ABCD-EFGH-JKMN|2|4|custom|"+RoomAdmission::hexText("Host")+"|"+std::string(64,'a')+"|"+RoomAdmission::hexText("Tornie")+"|"+RoomAdmission::hexText("Test map")+"|match|125|1";
+    REQUIRE(RoomAdmission::parsePublicGame(row,game));
+    REQUIRE(game.running); REQUIRE(game.allowLateJoin); REQUIRE(game.elapsedSeconds==125);
+    REQUIRE(game.mapName=="Test map"); REQUIRE(game.modName=="Tornie");
+    AdmissionResponse response; std::string error;
+    REQUIRE(RoomAdmission::parseAdmissionResponse("status=ok\nprotocol=1\nrequest="+std::string(64,'a')+"\nrequestState=pending\n",response,error,false,AdmissionOperation::JoinRequest));
+    REQUIRE(response.grant.empty());
+    REQUIRE_FALSE(RoomAdmission::parseAdmissionResponse("status=ok\nprotocol=1\nrequestState=approved\n",response,error,false,AdmissionOperation::JoinStatus));
+}
+
+TEST_CASE("Shared match controls require the correct role and a live admitted match", "[network][pause][security]") {
+    for(bool host : {false,true}) for(bool fromHost : {false,true})
+    for(bool live : {false,true}) for(bool established : {false,true}) {
+        const auto admission=established ? PeerAdmission::Established : PeerAdmission::Handshaking;
+        const auto role=host ? LocalRole::Host : LocalRole::Client;
+        const auto phase=live ? SessionPhase::InGame : SessionPhase::Lobby;
+        REQUIRE((NetworkPacketPolicy::classifyPacket(context(NETWORKPACKET_MATCH_CONTROL,
+            role,phase,admission,fromHost))==PacketVerdict::Accept) == (!host && fromHost && live && established));
+        REQUIRE((NetworkPacketPolicy::classifyPacket(context(NETWORKPACKET_MATCH_RESUME_REQUEST,
+            role,phase,admission,fromHost))==PacketVerdict::Accept) == (host && live && established));
+    }
 }

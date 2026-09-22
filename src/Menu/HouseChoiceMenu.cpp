@@ -20,6 +20,7 @@
 #include <Menu/PlaySetup.h>
 #include <Menu/SinglePlayerSkirmishMenu.h>
 #include <mod/ModManager.h>
+#include <Network/OnlineModPolicy.h>
 
 #include <globals.h>
 
@@ -75,16 +76,17 @@ constexpr int kEnemyAIOptionCount = sizeof(kEnemyAIClasses) / sizeof(kEnemyAICla
 
 // Static member definitions
 int HouseChoiceMenu::s_house = HOUSE_ATREIDES;
-bool HouseChoiceMenu::s_online = false;
+bool HouseChoiceMenu::s_online = true;
 bool HouseChoiceMenu::s_singleMission = false;
-bool HouseChoiceMenu::s_publicGame = false;
+bool HouseChoiceMenu::s_publicGame = true;
 int HouseChoiceMenu::s_startLevel = 1;
 int HouseChoiceMenu::s_supportBotIndex = 0;
 int HouseChoiceMenu::s_enemyAIIndex = 0;
 SettingsClass::GameOptionsClass HouseChoiceMenu::s_currentGameOptions;
 
-HouseChoiceMenu::HouseChoiceMenu(bool online, bool keepRules) : MenuBase()
+HouseChoiceMenu::HouseChoiceMenu(bool online, bool keepRules, bool showLobby) : MenuBase(), showLobby(showLobby)
 {
+    OnlineModPolicy::restoreApprovedSelection();
     s_online = online;
     currentHouseChoiceScrollPos = 0;
     if(!keepRules) s_currentGameOptions = effectiveGameOptions;
@@ -104,7 +106,11 @@ HouseChoiceMenu::HouseChoiceMenu(bool online, bool keepRules) : MenuBase()
     titleLabel.setTextColor(COLOR_WHITE);
     titleLabel.setTextFontSize(20);
     titleLabel.setAlignment(Alignment_HCenter);
-    windowWidget.addWidget(&titleLabel, Point(0,0), Point(640,26));
+    windowWidget.addWidget(&titleLabel, Point(48,0), Point(174,26));
+    onlineDescription.setTextFontSize(10);
+    onlineDescription.setTextColor(COLOR_WHITE);
+    onlineDescription.setAlignment(Alignment_Left);
+    windowWidget.addWidget(&onlineDescription, Point(232,0), Point(360,28));
     connectionDropDown.addEntry(_("Offline"), 0);
     connectionDropDown.addEntry(_("Online co-op"), 1);
     connectionDropDown.setSelectedItem(s_online ? 1 : 0);
@@ -163,12 +169,12 @@ HouseChoiceMenu::HouseChoiceMenu(bool online, bool keepRules) : MenuBase()
     label("Choose a house above, then start below.", 48, 339);
 
     label("Campaign mod", 48, 365);
-    availableMods = ModManager::instance().listMods();
+    availableMods = ModManager::instance().listModChoices();
     int activeIndex = 0;
     for(size_t i = 0; i < availableMods.size(); ++i) {
         const auto& mod = availableMods[i];
-        modDropDown.addEntry(mod.displayName.empty() ? mod.name : mod.displayName, static_cast<int>(i));
-        if(mod.name == ModManager::instance().getActiveModName()) activeIndex = static_cast<int>(i);
+        modDropDown.addEntry(mod.selectionLabel(), static_cast<int>(i));
+        if(mod.matchesSelectionName(ModManager::instance().getActiveModName())) activeIndex = static_cast<int>(i);
     }
     modDropDown.setSelectedItem(activeIndex);
     modDropDown.setOnSelectionChange(std::bind(&HouseChoiceMenu::onModSelectionChanged, this, std::placeholders::_1));
@@ -217,7 +223,13 @@ HouseChoiceMenu::HouseChoiceMenu(bool online, bool keepRules) : MenuBase()
     gameOptionsButton.setText(_("Game Rules"));
     gameOptionsButton.setOnClick(std::bind(&HouseChoiceMenu::onGameOptions, this));
     windowWidget.addWidget(&gameOptionsButton, Point(184, 455), Point(128, 24));
-    hostCoopButton.setOnClick([this]() { quit(s_house); });
+    hostCoopButton.setOnClick([this]() {
+        // Launch from the widgets, not only their last change notification.
+        onSupportBotSelectionChanged(false);
+        onEnemyAISelectionChanged(false);
+        s_startLevel = startLevelDropDown.getSelectedEntryIntData();
+        quit(s_house);
+    });
     windowWidget.addWidget(&hostCoopButton, Point(448,455), Point(144,24));
     backButton.setText(_("Back"));
     backButton.setOnClick([this] { quit(); });
@@ -332,10 +344,17 @@ void HouseChoiceMenu::populateLevels() {
 }
 
 void HouseChoiceMenu::updateConnection() {
-    hostCoopButton.setText(s_online ? _("Create Lobby") : s_singleMission ? _("Start Mission") : _("Start Campaign"));
+    const bool lobby = showLobby || !OnlineModPolicy::approved();
+    onlineDescription.setText(s_online
+        ? _("Public: others can watch or ask to join.\nChoose Private for invite-only play.")
+        : _("Play the campaign on this computer.\nStart directly with your chosen house and rules."));
+    hostCoopButton.setText(s_online && lobby ? _("Create Lobby") : s_singleMission ? _("Start Mission") : _("Start Campaign"));
+    if(s_online && !OnlineModPolicy::approved())
+        onlineDescription.setText(_("New mods use a pregame lobby.\nPlayers must join before the game starts."));
     visibilityDropDown.setEnabled(s_online);
-    supportBotDropDown.setEnabled(!s_online);
-    if(s_online) supportDescription.setText(_("Two people share one house and army.\nYour partner joins in the lobby."));
+    visibilityDropDown.setVisible(s_online);
+    supportBotDropDown.setEnabled(!s_online || !lobby);
+    if(s_online && lobby) supportDescription.setText(_("Choose your partner in the pregame lobby."));
     else onSupportBotSelectionChanged(false);
 }
 
@@ -397,4 +416,5 @@ void HouseChoiceMenu::onModSelectionChanged(bool interactive) {
     currentHouseChoiceScrollPos = std::min(currentHouseChoiceScrollPos, getMaxHouseScrollPos());
     updateHouseChoice();
     updateModDescription();
+    updateConnection();
 }

@@ -48,6 +48,8 @@ public:
     UnitBase& operator=(UnitBase &&) = delete;
 
     void save(OutputStream& stream) const override;
+    virtual void saveObserverRuntime(OutputStream& stream) const;
+    virtual void loadObserverRuntime(InputStream& stream);
 
     void blitToScreen() override;
 
@@ -69,6 +71,8 @@ public:
         \param  yPos    the y position on the map
     */
     void handleActionClick(int xPos, int yPos) override;
+    // Shared by contextual cursor/feedback and the actual right-click command.
+    ObjectBase* getActionClickTarget(int xPos, int yPos) const;
 
     /**
         This method is called when an unit is ordered to attack
@@ -178,6 +182,7 @@ public:
     bool isInWeaponRange(const ObjectBase* object) const;
 
     void setAngle(int newAngle);
+    const std::list<Coord>& getPlannedPath() const { return pathList; }
 
     void setTarget(const ObjectBase* newTarget) override;
 
@@ -263,6 +268,10 @@ public:
     virtual void playAttackSound();
 
 protected:
+    // Counts belong to the original house even while a unit is deviated.
+    void registerUnit();
+    bool restoredFromSave = false;
+
 
     void updateVisibleUnits();
 
@@ -275,6 +284,18 @@ protected:
     virtual void bumpyMovementOnRock(FixPoint fromDistanceX, FixPoint fromDistanceY, FixPoint toDistanceX, FixPoint toDistanceY);
 
     virtual void navigate();
+    bool usesDynastyGroundTiming() const;
+    bool turnDynastyBody(int wantedAngle);
+    bool beginDynastyStep(Uint64 routeTick);
+    bool moveDynastyStep();
+    virtual Coord movementEndpoint() const;
+    // Clock units are 1/3000 second: a legacy cycle is48, a Dynasty tick50.
+    // Persisted so saves and observer checkpoints continue mid-step exactly.
+    Uint64 dynastyRouteTick = 0;
+    Uint64 dynastyStepStart = 0, dynastyStepEnd = 0;
+    FixPoint dynastyStartX = 0, dynastyStartY = 0;
+    Coord dynastyEndpoint = Coord::Invalid();
+
 
     /**
         When the unit is currently idling this method is called about every 5 seconds.
@@ -282,6 +303,7 @@ protected:
     virtual void idleAction();
 
     virtual void setSpeeds();
+    FixPoint getTerrainAdjustedSpeed(int cargoPercent = 0) const;
 
     virtual void targeting();
     void enqueueTargetRequest(TargetRequestKind kind);

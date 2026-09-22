@@ -18,8 +18,8 @@
 #ifndef NETWORKMANAGER_H
 #define NETWORKMANAGER_H
 
-#include <Network/ENetPacketIStream.h>
-#include <Network/ENetPacketOStream.h>
+#include <Network/SnapshotTransfer.h>
+#include <Network/NetworkTransportTypes.h>
 #include <Network/ChangeEventList.h>
 #include <Network/CommandList.h>
 #include <Network/NetworkPacketTypes.h>
@@ -28,17 +28,21 @@
 #include <Network/DirectRoomTransport.h>
 #include <Network/RoomRelayClient.h>
 #include <Network/RoomSessionTransport.h>
+#include <Network/WebRtcTransport.h>
 
+#ifndef __EMSCRIPTEN__
 #include <Network/LANGameFinderAndAnnouncer.h>
 #include <Network/MetaServerClient.h>
 #include <Network/UPnPManager.h>
+#include <enet/enet.h>
+#endif
 
 #include <misc/string_util.h>
 #include <misc/SDL2pp.h>
 
-#include <enet/enet.h>
 #include <string>
 #include <list>
+#include <map>
 #include <vector>
 #include <functional>
 #include <stdarg.h>
@@ -46,6 +50,22 @@
 // rejectIncompatibleNetworkProtocol() and rejectIncompatibleGameVersion() moved to
 // Network/NetworkPacketPolicy.h so both transports can use them; they are still reachable
 // through this header.
+
+#ifdef __EMSCRIPTEN__
+/**
+    ENetPeer stand-in for the browser transport. Owns nothing itself: NetworkManager
+    allocates one per connected remote peer and stores its PeerData* in `data`,
+    exactly like ENet does for native connections. `webRtcPeerId` is the opaque
+    signaling/transport handle — browser peer identity never fakes IP/port data.
+*/
+struct NetPeer {
+    void* data = nullptr;
+    Uint32 roundTripTime = 0;
+    uint32_t webRtcPeerId = 0;
+};
+#else
+using NetPeer = ENetPeer;
+#endif
 
 #define AWAITING_CONNECTION_TIMEOUT     5000
 
@@ -92,8 +112,9 @@ public:
     bool isRoomSession() const {
         return transport == Transport::RoomRelay || transport == Transport::DirectP2P;
     }
-    /// Kept for call sites that mean "a room session rather than the ENet mesh".
-    bool isRelaySession() const { return isRoomSession(); }
+    /// Only the legacy relay needs a wall-clock batch cadence. Direct transports send each step.
+    static constexpr bool usesBatchedCommands(Transport kind) { return kind == Transport::RoomRelay; }
+    bool usesBatchedCommands() const { return usesBatchedCommands(transport); }
     /// True only when gameplay travels straight between the players.
     bool isDirectSession() const { return transport == Transport::DirectP2P; }
 
@@ -200,11 +221,37 @@ public:
     void stopServer();
 
     void connect(const std::string& hostname, int port, const std::string& playerName);
+#ifndef __EMSCRIPTEN__
     void connect(ENetAddress address, const std::string& playerName);
+#else
+    /**
+        Browser transport: enter the global matchmaking lobby. The lobby pairs
+        the next two finders and assigns the roles (host/joiner); pairing is
+        reported through the onMatched callback. No IP/port or room code
+        involved.
+    */
+    void connectWebRtc(const std::string& playerName);
+
+    /// Leave the matchmaking queue; only meaningful before pairing.
+    void cancelMatchmaking();
+#endif
 
     void disconnect();
 
     void update();
+
+#ifdef __EMSCRIPTEN__
+    /// Coarse transport state for UI (connecting/connected/error indicators).
+    WebRtcTransport::State getWebRtcState() const { return pWebRtcTransport ? pWebRtcTransport->getState() : WebRtcTransport::State::Idle; }
+
+    /**
+        Sets the function that should be called when the matchmaking lobby pairs us.
+        \param  pOnMatched  function to call; true when we take the host (offer) role
+    */
+    inline void setOnMatched(std::function<void (bool bHost)> pOnMatched) {
+        this->pOnMatched = pOnMatched;
+    }
+#endif
 
     void sendChatMessage(const std::string& message);
 
@@ -222,6 +269,43 @@ public:
         transfers, stop being accepted from this point on.
         \param  seed    the shared simulation seed
     */
+    bool beginLateJoin(const std::string& requestId, const std::string& name, const GameInitSettings& snapshot, bool spectator = false);
+    bool canCancelLateJoin() const { return bIsServer && lateJoinPaused() && joinStage!=JoinStage::Starting && joinStage!=JoinStage::Ready; }
+    void cancelLateJoin() { if(canCancelLateJoin()) abortLateJoin("The host cancelled the join request."); }
+    bool lateJoinPaused() const { return joinStage != JoinStage::Idle; }
+    bool lateJoinReady() const { return joinStage == JoinStage::Ready; }
+    bool lateJoinLoading() const { return joinLoading; }
+    const std::string& lateJoinStatus() const { return joinStatus; }
+    const std::string& lateJoinPlayerName() const { return joinName; }
+    std::string recentJoinNotice() const {
+        return SDL_GetTicks() - joinNoticeTime < 12000 ? joinNotice : std::string();
+    }
+    // Percent describes the current stage, not an estimated elapsed duration.
+    int lateJoinPercent() const;
+    std::string lateJoinProgressText() const;
+    bool observerCatchingUp() const { return observerCatchup; }
+    void observerAdvanced(Uint32 cycle);
+    const std::string& joinFailure() const { return joinFailureReason; }
+    void failObserver(const std::string& reason);
+    bool requestObserverResync(Uint32 cycle);
+    bool observerResyncWaiting() const { return observerResyncPending; }
+    std::unique_ptr<GameInitSettings> takeLateJoin();
+    void expectLateJoin() { joinExpected=true; }
+    bool isSpectator(const std::string& name) const {
+        if(spectators.count(name)) return true;
+        if(const auto* direct=getDirectTransport()) for(const auto& p : direct->peers())
+            if(p.name==name) return p.spectator;
+        return false;
+    }
+    bool isSpectating() const { return (getDirectTransport() && getDirectTransport()->isSpectating()) || isSpectator(playerName); }
+    std::vector<Uint32> observersNeedingSnapshot() const;
+    bool beginObserverSnapshot(Uint32 peer, const GameInitSettings& snapshot, const std::string& runtime, Uint32 cycle);
+    void publishObserverCycle(Uint32 cycle, const std::string& bytes);
+    bool hasObserverStreams() const { return !observerTransfers.empty(); }
+    bool takeObserverCycle(Uint32 cycle, std::string& bytes);
+    std::string takeObserverRuntime() { auto bytes=std::move(observerRuntime); observerRuntime.clear(); return bytes; }
+    void observerLoaded(Uint32 cycle);
+    Uint32 observerFrontier() const { return observerNextCycle; }
     void beginSimulation(Uint32 seed);
     void sendCommandList(const CommandList& commandList);
 
@@ -232,12 +316,12 @@ public:
 
         if(pRelayClient) {
             for(const RoomSessionTransport::Peer& peer : pRelayClient->peers()) {
-                peerNameList.push_back(peer.name);
+                if(!peer.spectator) peerNameList.push_back(peer.name);
             }
             return peerNameList;
         }
 
-        for(const ENetPeer* pPeer : peerList) {
+        for(const NetPeer* pPeer : peerList) {
             PeerData* peerData = static_cast<PeerData*>(pPeer->data);
             if(peerData != nullptr) {
                 peerNameList.push_back(peerData->name);
@@ -255,6 +339,7 @@ public:
     Uint32 getRelayServerRoundTripTimeMs() const;
     bool isRelayHttpPollingSession() const;
 
+#ifndef __EMSCRIPTEN__
     LANGameFinderAndAnnouncer* getLANGameFinderAndAnnouncer() {
         return pLANGameFinderAndAnnouncer.get();
     };
@@ -262,6 +347,7 @@ public:
     MetaServerClient* getMetaServerClient() {
         return pMetaServerClient.get();
     };
+#endif
 
     /**
         Sets the function that should be called when a chat message is received
@@ -356,6 +442,26 @@ public:
     }
 
     /**
+        Sets the function called when the host's authoritative match control state arrives
+        (client and spectator only).
+        \param  pOnReceiveMatchControl  function to call with (revision, speed, pauseCycle, resumedPauseCycle)
+    */
+    inline void setOnReceiveMatchControl(std::function<void (Uint32, Uint32, Uint32, Uint32)> pOnReceiveMatchControl) {
+        this->pOnReceiveMatchControl = pOnReceiveMatchControl;
+    }
+
+    /**
+        Sets the function called when a peer asks to leave a pause (host only).
+
+        The name passed to the callback is bound to the connection the request arrived on, so
+        the game can check it against the active human players.
+        \param  pOnReceiveMatchResumeRequest function to call with (peer name, pauseCycle)
+    */
+    inline void setOnReceiveMatchResumeRequest(std::function<void (const std::string&, Uint32)> pOnReceiveMatchResumeRequest) {
+        this->pOnReceiveMatchResumeRequest = pOnReceiveMatchResumeRequest;
+    }
+
+    /**
         Sends client performance stats to host (client → host).
         \param  avgFps          Average FPS (legacy metric)
         \param  simMsAvg        Average simulation time per tick in ms (primary metric)
@@ -372,6 +478,28 @@ public:
     */
     void broadcastPathBudget(size_t newBudget, Uint32 applyCycle);
 
+    /**
+        Broadcasts the authoritative match control state to every connected peer, spectators
+        included (host → all).
+
+        Only the host decides the shared settings. Resume travels this way rather than as a
+        synchronized command because a paused simulation no longer produces command cycles.
+        \param  revision            monotonic state revision, never zero
+        \param  speed               wall-clock milliseconds per tick, GAMESPEED_MIN..GAMESPEED_MAX
+        \param  pauseCycle          cycle the current pause started at, 0 when never paused
+        \param  resumedPauseCycle   pause cycle that has been lifted, never above pauseCycle
+    */
+    void sendMatchControl(Uint32 revision, Uint32 speed, Uint32 pauseCycle, Uint32 resumedPauseCycle);
+
+    /**
+        Asks the host to lift a pause (client → host).
+
+        The host decides: it checks that the sender is an active human player of this match and
+        answers everybody with sendMatchControl().
+        \param  pauseCycle  the pause this client believes the match is in, never 0
+    */
+    void requestMatchResume(Uint32 pauseCycle);
+
     // === Mod Transfer Methods ===
 
     /**
@@ -381,7 +509,7 @@ public:
         \param  modName         Name of the active mod
         \param  modChecksum     Combined mod checksum
     */
-    void sendModInfoToPeer(ENetPeer* peer, const std::string& modName, const std::string& modChecksum);
+    void sendModInfoToPeer(NetPeer* peer, const std::string& modName, const std::string& modChecksum);
 
     /**
         Send mod info to all connected clients (host only).
@@ -436,6 +564,44 @@ public:
     }
 
 private:
+    enum class JoinStage { Idle, Preparing, Admission, Connecting, Sending, Receiving, Starting, Ready };
+    JoinStage joinStage = JoinStage::Idle;
+    Uint32 joinTotal = 0, joinTransaction = 0, joinDeadline = 0, joinOffset = 0, joinNextOffset = 0, resumeSeed = 0;
+    bool joinExpected = false, joinLoading = false, joinAsSpectator = false;
+    std::set<std::string> spectators, joinSpectators;
+    std::string joinRequestId, joinName, joinBytes, joinStatus;
+    std::string joinNotice;
+    Uint32 joinNoticeTime = 0;
+    std::vector<Uint32> joinOriginalPeers;
+    std::map<Uint32,Uint32> joinAcks;
+    std::unique_ptr<GameInitSettings> joinSnapshot;
+    std::function<void (Uint32, Uint32, Uint32, Uint32, const std::string&)> pOnJoinSync;
+    void receiveJoinSync(Uint32 peer, Uint32 operation, Uint32 transaction, Uint32 offset, const std::string& data);
+    void updateLateJoin();
+    bool sendObserverPacket(Uint32 peer, Uint32 operation, Uint32 epoch, Uint32 offset, const std::string& data);
+    void receiveObserverPacket(Uint32 peer, Uint32 operation, Uint32 epoch, Uint32 offset, const std::string& data);
+    void updateObservers();
+    void forwardObserverChat(const std::string& sender, const std::string& message);
+    struct ObserverTransfer {
+        SnapshotTransfer::Sender checkpoint;
+        Uint32 epoch=0, offset=0, sent=0, nextCycle=0, ackCycle=0, deadline=0;
+        bool began=false, ready=false;
+        Uint32 progressAt=0;
+    };
+    std::map<Uint32,ObserverTransfer> observerTransfers;
+    std::deque<std::pair<Uint32,std::string>> observerHistory, observerIncoming;
+    std::size_t observerHistoryBytes=0;
+    std::string observerBytes, observerRuntime;
+    Uint32 observerDecodedSize=0;
+    Uint32 observerEpoch=0, observerTotal=0, observerNextCycle=0, observerSendCursor=0;
+    Uint32 observerStartCycle=0, observerHostCycle=0, observerAppliedCycle=0;
+    bool observerCatchup=false, observerResyncPending=false;
+    Uint32 observerResyncDeadline=0, observerSnapshotSerial=0;
+    unsigned observerResyncAttempts=0;
+    std::map<Uint32,unsigned> observerRestarts;
+    std::string joinFailureReason;
+    void abortLateJoin(const std::string& reason);
+    bool sendJoinSync(Uint32 operation, Uint32 offset, const std::string& data, Uint32 recipient = 0);
     bool publicRelayRoom = false;
     static void debugNetwork(PRINTF_FORMAT_STRING const char* fmt, ...) PRINTF_VARARG_FUNC(1);
 
@@ -461,32 +627,48 @@ private:
         \param  channel         0 or 1
         \param  recipient       0 for every other peer in the room, or a relay peer id
     */
-    bool sendPacketOverRelay(ENetPacketOStream& packetStream, int channel,
+    bool sendPacketOverRelay(NetworkPacketOStream& packetStream, int channel,
                              std::uint32_t recipient);
 
     /// The relay peer id of the designated host, or 0 if this process is the host.
     std::uint32_t relayHostPeerId() const;
 
-    void sendPacketToHost(ENetPacketOStream& packetStream, int channel = 0);
+    void sendPacketToHost(NetworkPacketOStream& packetStream, int channel = 0);
 
-    void sendPacketToPeer(ENetPeer* peer, ENetPacketOStream& packetStream, int channel = 0);
-    
+    void sendPacketToPeer(NetPeer* peer, NetworkPacketOStream& packetStream, int channel = 0);
+
     /**
         Package and send mod files to a peer in chunks.
         \param  peer        The peer to send to
         \param  modName     Name of the mod to send
     */
-    void sendModFilesToPeer(ENetPeer* peer, const std::string& modName);
+    void sendModFilesToPeer(NetPeer* peer, const std::string& modName);
 
-    void sendPacketToAllConnectedPeers(ENetPacketOStream& packetStream, int channel = 0);
+    void sendPacketToAllConnectedPeers(NetworkPacketOStream& packetStream, int channel = 0);
 
-    void handlePacket(ENetPeer* peer, ENetPacketIStream& packetStream);
+    void handlePacket(NetPeer* peer, NetworkPacketIStream& packetStream);
+
+#ifdef __EMSCRIPTEN__
+    /// Look up (or create) the NetPeer for a transport peer handle.
+    NetPeer* findPeerByWebRtcId(uint32_t webRtcPeerId, bool bCreate);
+    /// Disconnect one remote peer (browser: tears down the single connection).
+    void disconnectPeer(NetPeer* peer, int cause);
+    /// Drop all peer bookkeeping after the transport went away.
+    void clearAllPeers();
+    void drainWebRtcDisconnects();
+    void releaseWebRtcPeer(NetPeer* peer, int cause, bool notify);
+    std::map<uint32_t, int> pendingWebRtcDisconnects;
+#else
+    void disconnectPeer(ENetPeer* peer, enet_uint32 cause) {
+        enet_peer_disconnect_later(peer, cause);
+    }
+#endif
 
     /**
         Hands a mesh packet to the payload handling that both transports share.
         \return true if this packet id belongs to the shared set
     */
-    bool routeSharedPayload(ENetPeer* peer, Uint32 packetType, ENetPacketIStream& packetStream);
+    bool routeSharedPayload(NetPeer* peer, Uint32 packetType, NetworkPacketIStream& packetStream);
 
     class PeerData;
 
@@ -496,7 +678,7 @@ private:
         \param  packetType  the packet id that was just read
         \return true if the packet may be interpreted
     */
-    bool admitPacket(ENetPeer* peer, Uint32 packetType);
+    bool admitPacket(NetPeer* peer, Uint32 packetType);
 
     /**
         Records a rejected or malformed packet for this peer, throttles the log line and
@@ -504,7 +686,7 @@ private:
         \param  peer    the offending connection
         \param  reason  short description for the log
     */
-    void noteRejectedPacket(ENetPeer* peer, const char* reason);
+    void noteRejectedPacket(NetPeer* peer, const char* reason);
 
     /**
         Requests a disconnect once and marks the connection, so further packets from it are
@@ -512,7 +694,7 @@ private:
         \param  peer    the connection to drop
         \param  reason  short description for the single log line
     */
-    void beginPeerDisconnect(ENetPeer* peer, const char* reason);
+    void beginPeerDisconnect(NetPeer* peer, const char* reason);
 
     /**
         Accounts the raw size of an inbound packet against this peer's byte budget.
@@ -520,7 +702,7 @@ private:
         \param  byteCount   size of the packet as delivered by ENet
         \return true if the packet may be parsed
     */
-    bool acceptIncomingBytes(ENetPeer* peer, std::size_t byteCount);
+    bool acceptIncomingBytes(NetPeer* peer, std::size_t byteCount);
 
     class PeerData {
     public:
@@ -533,12 +715,12 @@ private:
         };
 
 
-        PeerData(ENetPeer* pPeer, PeerState peerState)
+        PeerData(NetPeer* pPeer, PeerState peerState)
          : pPeer(pPeer), peerState(peerState), timeout(0)  {
         }
 
 
-        ENetPeer*               pPeer;
+        NetPeer*                pPeer;
 
         PeerState               peerState;
         Uint32                  timeout;
@@ -549,7 +731,8 @@ private:
         std::string             gameVersion;
         std::string             quantBotConfigHash;
         std::string             objectDataHash;
-        std::list<ENetPeer*>    notYetConnectedPeers;
+        std::string             modRevisionHash;
+        std::list<NetPeer*>      notYetConnectedPeers;
 
         // Abuse accounting: a legitimate peer never trips these.
         NetworkPacketPolicy::RefusalCounter refusals;
@@ -564,7 +747,7 @@ private:
         \param  peerState   the initial handshake state
         \return the new peer state (ownership stays with peer->data)
     */
-    PeerData* createPeerData(ENetPeer* peer, PeerData::PeerState peerState);
+    PeerData* createPeerData(NetPeer* peer, PeerData::PeerState peerState);
 
     // The path budget, start-game countdown and chat length bounds moved to
     // src/Network/GamePayloadRouter.cpp with the payload handling they belong to. Two copies of
@@ -599,7 +782,9 @@ private:
     Uint32 nextClientId = 1;        ///< source of the stable per-connection client ids
     Uint32 lastUnidentifiedLogTime = 0;  ///< throttles logging for connections without peer state
     Uint32 simulationSeed = 0;
+#ifndef __EMSCRIPTEN__
     ENetHost* host = nullptr;
+#endif
     bool bIsServer = false;
     bool bLANServer = false;
     bool bGameInProgress = false;  // Set true when game starts - disables lobby-only features
@@ -609,11 +794,18 @@ private:
 
     std::string playerName;
 
-    ENetPeer*   connectPeer = nullptr;
+    NetPeer*   connectPeer = nullptr;
 
-    std::list<ENetPeer*> peerList;
+    std::list<NetPeer*> peerList;
 
-    std::list<ENetPeer*> awaitingConnectionList;
+    std::list<NetPeer*> awaitingConnectionList;
+
+#ifdef __EMSCRIPTEN__
+    std::unique_ptr<WebRtcTransport> pWebRtcTransport;
+    uint32_t connectPeerWebRtcId = 0;   // transport handle of the host we joined
+    bool bWebRtcHost = false;           // role assigned by the lobby (Matched event)
+    std::function<void (bool)> pOnMatched;
+#endif
 
     std::function<void (const std::string&, const std::string&)>            pOnReceiveChatMessage;
     std::function<void (const GameInitSettings&, const ChangeEventList&)>   pOnReceiveGameInfo;
@@ -627,6 +819,8 @@ private:
     std::function<void (const std::string&)>                                 pOnConfigMismatch;
     std::function<void (Uint32, Uint32, float, float, Uint32, Uint32)>     pOnReceiveClientStats;      // Host: (clientId, gameCycle, avgFps, simMsAvg, queueDepth, currentBudget)
     std::function<void (size_t, Uint32)>                                     pOnReceiveSetPathBudget;    // Client: (newBudget, applyCycle)
+    std::function<void (Uint32, Uint32, Uint32, Uint32)>                    pOnReceiveMatchControl;     // Client: (revision, speed, pauseCycle, resumedPauseCycle)
+    std::function<void (const std::string&, Uint32)>                        pOnReceiveMatchResumeRequest; // Host: (bound peer name, pauseCycle)
     std::function<void (const std::string&, const std::string&)>            pOnReceiveModInfo;          // Client: (modName, modChecksum)
     std::function<void (size_t, size_t)>                                     pOnModDownloadProgress;     // Client: (bytesReceived, totalBytes)
     std::function<void (bool, const std::string&)>                          pOnModDownloadComplete;     // Client: (success, errorMsg)
@@ -653,6 +847,13 @@ private:
     /// Clears a mod download, optionally reporting the failure to the lobby.
     void abortModTransfer(const char* reason);
 
+    // Keep-alive: send a reliable ping every 10 seconds (ENet reliable packet
+    // natively, control DataChannel in the browser build) to keep the
+    // connection warm.
+    Uint32                                      lastKeepAliveTime = 0;
+    static constexpr int                        KEEPALIVE_INTERVAL_MS = 10000;   // 10 seconds
+
+#ifndef __EMSCRIPTEN__
     std::unique_ptr<LANGameFinderAndAnnouncer>  pLANGameFinderAndAnnouncer = nullptr;
     std::unique_ptr<MetaServerClient>           pMetaServerClient = nullptr;
     std::unique_ptr<UPnPManager>                pUPnPManager = nullptr;
@@ -661,11 +862,7 @@ private:
     Uint32                                      upnpLeaseStartTime = 0;
     static constexpr int                        UPNP_LEASE_DURATION = 3600;      // 1 hour lease
     static constexpr int                        UPNP_RENEWAL_MARGIN = 300;       // Renew 5 min before expiry
-    
-    // NAT keep-alive: send reliable ping every 10 seconds to prevent NAT timeout
-    Uint32                                      lastKeepAliveTime = 0;
-    static constexpr int                        KEEPALIVE_INTERVAL_MS = 10000;   // 10 seconds
-    
+
     // NAT Hole Punch: Non-blocking state machine for host-side punching
     struct PendingPunch {
         std::string clientId;
@@ -720,6 +917,7 @@ public:
      * Get the ENet host (for STUN queries)
      */
     ENetHost* getHost() const { return host; }
+#endif // __EMSCRIPTEN__
 };
 
 #endif // NETWORKMANAGER_H

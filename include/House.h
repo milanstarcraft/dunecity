@@ -50,12 +50,15 @@ public:
     virtual void save(OutputStream& stream) const;
 
     void addPlayer(std::unique_ptr<Player> newPlayer);
+    void configureNetworkPlayers(const std::vector<std::pair<std::string, std::string>>& desired);
     void configureCoopPlayers(const std::vector<std::pair<std::string, std::string>>& desired);
 
     inline int getHouseID() const { return houseID; }
     inline int getTeamID() const { return teamID; }
 
     inline bool isAI() const { return ai; }
+    // The live value can differ from the controller-list load default after promotion.
+    void restoreObserverAI(bool enabled) { ai = enabled; }
     bool isAutoRepairEnabled() const { return autoRepairEnabled; }
     void setAutoRepairEnabled(bool enabled) { autoRepairEnabled = enabled; }
     inline bool isAlive() const { return (teamID == 0) || !(((numStructures - numItem[Structure_Wall]) <= 0) && (((numUnits - numItem[Unit_Carryall] - numItem[Unit_ChemicalCarryall] - numItem[Unit_Harvester] - numItem[Unit_RebelHarvester] - numItem[Unit_Frigate] - numItem[Unit_Sandworm] - numItem[Unit_AmbientAirplane] - numItem[Unit_AmbientHelicopter]) <= 0))); }
@@ -73,7 +76,9 @@ public:
     inline bool hasSandworm() const { return (numItem[Unit_Sandworm] > 0); }
     inline bool hasRadar() const { return (numItem[Structure_Radar] > 0); }
 
-    inline bool hasRadarOn() const { return (hasRadar() && hasPower()); }
+    // Radar always needs its full power allocation, even when other
+    // production is allowed to operate without power (vanilla rules).
+    inline bool hasRadarOn() const { return hasRadar() && producedPower >= powerRequirement; }
     bool isPowerRequired() const;
     bool hasPower() const;
 
@@ -115,8 +120,8 @@ public:
     inline int getNumVisibleFriendlyUnits() const { return numVisibleFriendlyUnits; }
 
     inline int getQuota() const { return quota; };
-    inline int getMaxUnits() const { return maxUnits; };
-    inline int getMaxHarvesters() const { return maxHarvesters; };
+    int getMaxUnits() const;
+    int getMaxHarvesters() const;
 
     inline void informContactWithEnemy() { bHadContactWithEnemy = true; };
     inline bool hadContactWithEnemy() const { return bHadContactWithEnemy; };
@@ -142,9 +147,10 @@ public:
         \return true, if the limit is already reached, false if building further ground units is allowed
     */
     inline bool isGroundUnitLimitReached() const {
-        if (maxUnits == 0) return false;  // 0 = unlimited units
+        const int limit = getMaxUnits();
+        if (limit == 0) return false;  // 0 = unlimited units
         int numGroundUnit = numUnits - numItem[Unit_Soldier] - numItem[Unit_Trooper] - numItem[Unit_Carryall] - numItem[Unit_ChemicalCarryall] - numItem[Unit_Ornithopter];
-        return (numGroundUnit + (numItem[Unit_Soldier]+2)/3 + (numItem[Unit_Trooper]+2)/3  >= maxUnits);
+        return (numGroundUnit + (numItem[Unit_Soldier]+2)/3 + (numItem[Unit_Trooper]+2)/3  >= limit);
     };
 
     /**
@@ -152,9 +158,10 @@ public:
         \return true, if the limit is already reached, false if building further infantry units is allowed
     */
     inline bool isInfantryUnitLimitReached() const {
-        if (maxUnits == 0) return false;  // 0 = unlimited units
+        const int limit = getMaxUnits();
+        if (limit == 0) return false;  // 0 = unlimited units
         int numGroundUnit = numUnits - numItem[Unit_Soldier] - numItem[Unit_Trooper] - numItem[Unit_Carryall] - numItem[Unit_ChemicalCarryall] - numItem[Unit_Ornithopter];
-        return (numGroundUnit + numItem[Unit_Soldier]/3 + numItem[Unit_Trooper]/3  >= maxUnits);
+        return (numGroundUnit + numItem[Unit_Soldier]/3 + numItem[Unit_Trooper]/3  >= limit);
     };
 
     /**
@@ -162,8 +169,9 @@ public:
         \return true, if the limit is already reached, false if building further air units is allowed
     */
     inline bool isAirUnitLimitReached() const {
-        if (maxUnits == 0) return false;  // 0 = unlimited units
-        return (numItem[Unit_Carryall] + numItem[Unit_ChemicalCarryall] + numItem[Unit_Ornithopter] >= 11*std::max(maxUnits,25)/25);
+        const int limit = getMaxUnits();
+        if (limit == 0) return false;  // 0 = unlimited units
+        return (numItem[Unit_Carryall] + numItem[Unit_ChemicalCarryall] + numItem[Unit_Ornithopter] >= 11*std::max(limit,25)/25);
     }
 
     /**
@@ -177,8 +185,9 @@ public:
         \return true, if the limit is already reached, false if building further harvesters is allowed
     */
     inline bool isHarvesterLimitReached() const {
-        if (maxHarvesters == 0) return false;  // 0 = unlimited harvesters
-        return ((numItem[Unit_Harvester] + numItem[Unit_RebelHarvester]) >= maxHarvesters);
+        const int limit = getMaxHarvesters();
+        if (limit == 0) return false;  // 0 = unlimited harvesters
+        return ((numItem[Unit_Harvester] + numItem[Unit_RebelHarvester]) >= limit);
     }
 
     inline Choam& getChoam() { return choam; };
@@ -188,10 +197,15 @@ public:
     inline FixPoint getStartingCredits() const { return startingCredits; }
     inline FixPoint getStoredCredits() const { return storedCredits; }
     inline FixPoint getCityCredits() const { return cityCredits; }
+    inline FixPoint getCityTaxReceipts() const { return cityTaxReceipts; }
     static constexpr int MAX_GAME_CREDITS = 999999;
+    /// Cap for the cumulative tax statistic. Far above any reachable mission
+    /// total, but small enough that the 32.32 fixed-point total cannot overflow.
+    static constexpr int MAX_CITY_TAX_RECEIPTS = 1000000000;
     inline int getCredits() const { return lround(storedCredits+startingCredits+cityCredits); }
     void addCredits(FixPoint newCredits, bool wasRefined = false);
     void addCityCredits(FixPoint amount);
+    void addCityTaxReceipts(FixPoint grossAmount);
     void returnCredits(FixPoint newCredits);
     FixPoint takeCredits(FixPoint amount);
 
@@ -201,7 +215,7 @@ public:
 
     void update();
 
-    void incrementUnits(int itemID);
+    void incrementUnits(int itemID, bool addMilitaryValue = true);
     void decrementUnits(int itemID);
     void cancelCreatedUnit(int itemID);
     void incrementStructures(int itemID);
@@ -267,6 +281,7 @@ protected:
     FixPoint storedCredits;   ///< current number of credits that are stored in refineries/silos
     FixPoint startingCredits; ///< number of starting credits this player still has
     FixPoint cityCredits;     ///< spendable city tax income, excluded from the harvested-spice quota
+    FixPoint cityTaxReceipts; ///< cumulative gross city tax collected this mission (statistic only: never spent, never reduced by police costs or credit caps)
     int oldCredits;           ///< amount of credits in the last game cycle (used for playing the credits tick sound)
 
     int maxUnits;             ///< maximum number of units this house is allowed to build

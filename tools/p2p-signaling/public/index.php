@@ -20,15 +20,20 @@ require __DIR__ . '/../src/Http.php';
 require __DIR__ . '/../src/Store.php';
 require __DIR__ . '/../src/Rate.php';
 require __DIR__ . '/../src/Analytics.php';
+require __DIR__ . '/../src/PublicActivity.php';
 require __DIR__ . '/../src/Sdp.php';
 require __DIR__ . '/../src/Rooms.php';
 require __DIR__ . '/../src/Signaling.php';
 require __DIR__ . '/../src/Lobby.php';
+require __DIR__ . '/../src/Content.php';
 
-const ADMISSION_PATHS = ['/v1/admission/host', '/v1/admission/join', '/v1/admission/list',
+const CONTENT_PATHS = ['/v1/content/list', '/v1/content/begin', '/v1/content/chunk',
+                       '/v1/content/commit', '/v1/content/manifest', '/v1/content/blob'];
+
+const ADMISSION_PATHS = ['/v1/admission/inspect', '/v1/admission/request', '/v1/admission/request-status', '/v1/admission/host', '/v1/admission/join', '/v1/admission/list',
                          '/v1/admission/visibility', '/v1/lobby/enter', '/v1/lobby/poll',
                          '/v1/lobby/say'];
-const SIGNALING_PATHS = ['/v1/p2p/session', '/v1/p2p/poll', '/v1/p2p/signal', '/v1/p2p/phase',
+const SIGNALING_PATHS = ['/v1/p2p/join-requests', '/v1/p2p/session', '/v1/p2p/poll', '/v1/p2p/signal', '/v1/p2p/phase',
                          '/v1/p2p/leave'];
 
 /** Field shapes, as strict as the client's own. Anything not in this table is not a field. */
@@ -47,6 +52,10 @@ const FIELD_RULES = [
     'kind'         => '/^(offer|answer|candidate)$/D',
     'phase'        => '/^(lobby|match)$/D',
     'roster'       => '/^[1-9][0-9]{0,4}(,[1-9][0-9]{0,4}){0,15}$/D',
+    'spectate'     => '/^[01]$/D',
+    'cancel'       => '/^[01]$/D',
+    'request'      => '/^[0-9a-f]{64}$/D',
+    'action'       => '/^(list|approve|approve_spectator|decline|abort|request_play|cancel_play|play_status)$/D',
     'bye'          => '/^[01]$/D',
 ];
 
@@ -129,6 +138,7 @@ function admissionLines(Config $config, array $room, string $grant, bool $host):
 }
 
 $signalingResponse = false;
+$contentResponse = false;
 $http = null;
 $log = null;
 $path = '';
@@ -138,20 +148,26 @@ try {
     $http = new Http($config);
     $path = $http->path();
     $signalingResponse = in_array($path, SIGNALING_PATHS, true);
+    $contentResponse = in_array($path, CONTENT_PATHS, true);
 
     $store = new Store($config->stateDir());
     $rooms = new Rooms($store, $config);
     $log = new ServiceLog($store, $config->get('log_enabled') === true,
                           static fn(): string => $rooms->logSalt());
     $analytics = new Analytics($store, $config->get('analytics_enabled') === true);
+    $activity = new PublicActivity($store, $config->get('analytics_enabled') === true);
     $rate = new Rate($store);
     $address = $http->address();
     $method = $http->method();
-    $known = in_array($path, ADMISSION_PATHS, true) || $signalingResponse;
+    $known = in_array($path, ADMISSION_PATHS, true) || $signalingResponse || $contentResponse;
 
     // The ingress allowance is charged before anything is parsed, so the cheapest way to reach
     // this service is still bounded.
-    $rate->charge('ingress', $address, Limits::RATE_GLOBAL_INGRESS, Limits::RATE_ADDRESS_INGRESS);
+    if ($contentResponse) {
+        $rate->charge('content', $address, 16384, 4096);
+    } else {
+        $rate->charge('ingress', $address, Limits::RATE_GLOBAL_INGRESS, Limits::RATE_ADDRESS_INGRESS);
+    }
 
     if ($method === 'GET' && $path === '/v1/health') {
         $http->send(200, [['status', 'ok'], ['protocol', (string)Limits::PROTOCOL_VERSION]], false);
@@ -171,6 +187,15 @@ try {
     $http->requireSecureTransport();
     $http->checkOrigin();
 
+    if ($contentResponse) {
+        if ($path === '/v1/content/begin') $rate->charge('contentBegin', $address, 256, 32);
+        if ($path === '/v1/content/commit') $rate->charge('contentCommit', $address, 256, 64);
+        $form = $http->form(524288, Content::MAX_MANIFEST * 2 + 32);
+        $lines = (new Content($config))->handle(substr($path, strlen('/v1/content/')), $form, $address);
+        Content::send($http, 200, $lines);
+        return;
+    }
+
     $isSignal = $path === '/v1/p2p/signal';
     $form = $http->form(
         $isSignal ? Limits::HTTP_MAX_SIGNAL_BODY_BYTES : Limits::HTTP_MAX_BODY_BYTES,
@@ -189,6 +214,11 @@ try {
         $signaling = new Signaling($store, $config);
         $maxPayload = (int)$config->get('max_signal_payload_bytes');
 
+        if ($path === '/v1/p2p/join-requests') {
+            $lines=$signaling->manageLateJoin($token,optionalField($form,'action','list'),optionalField($form,'request',''));
+            $http->send(200,array_merge([['status','ok'],['protocol',(string)Limits::PROTOCOL_VERSION]],$lines),true);
+            return;
+        }
         if ($path === '/v1/p2p/poll') {
             $cursor = requireInteger($form, 'cursor', 0, 1000000000);
             $result = $signaling->poll($token, $cursor, $maxPayload);
@@ -224,13 +254,17 @@ try {
                 'phase' => $result['phase'], 'epoch' => $result['epoch'],
                 'everStarted' => $result['everStarted'],
             ]);
-            if ($phase === 'match' && $result['phaseChanged']) {
+            if ($phase === 'match' && $result['phaseChanged'] && !($result['resuming']??false)) {
                 notifyLobby('started', $result);
                 $analytics->record('started', [
                     'room_log_id' => $result['logId'] ?? null,
                     'peers_admitted' => $result['peers'],
                 ]);
             }
+            if ($phase === 'match' && $result['phaseChanged'] && ($result['resuming'] ?? false)
+                && isset($result['notification']['joined_name'])) notifyLobby('hot_joined', $result);
+            if ($phase==='match' && $result['phaseChanged'] && !empty($result['publicActivity']))
+                $activity->record('public_game_started',$result['publicActivity']);
             $http->send(200, [['status', 'ok'], ['protocol', (string)Limits::PROTOCOL_VERSION],
                               ['phase', $result['phase']], ['startId', $result['startId']],
                               ['roster', $result['roster']]], true);
@@ -257,7 +291,7 @@ try {
     // Everything else carries the compatibility claims
     // ------------------------------------------------------------------------------------
     if ($path !== '/v1/p2p/session') {
-        $polling = in_array($path, ['/v1/admission/list', '/v1/lobby/poll', '/v1/lobby/say'], true);
+        $polling = in_array($path, ['/v1/admission/list', '/v1/admission/request-status', '/v1/lobby/poll', '/v1/lobby/say'], true);
         $rate->charge(
             $polling ? 'poll' : 'admission',
             $address,
@@ -282,7 +316,7 @@ try {
                'appVersion' => $appVersion, 'runtime' => $runtime];
 
     if (str_starts_with($path, '/v1/lobby/')) {
-        $lobby = new Lobby($store);
+        $lobby = new Lobby($store, $activity);
         $lines = $lobby->handle(substr($path, strlen('/v1/lobby/')), $form, $gameProtocol,
                                 $contentHash, $address);
         $http->send(200, array_merge([['status', 'ok'],
@@ -301,6 +335,8 @@ try {
         $result = $signaling->redeemAndSeat($grant, $claims, $name, $runtime,
             array_key_exists('nonce', $form) ? requireField($form, 'nonce') : '');
         $room = $result;
+        if (!($result['recovered'] ?? false) && ($result['spectator'] ?? false))
+            notifyLobby('hot_joined', $result);
         $rooms->touch(Signaling::roomIdFromSession($result['session']), array_merge($result,
             $result['role'] === 'host' ? ['hostSeated' => true] : []));
         if (!($result['recovered'] ?? false)) $analytics->record('joined', [
@@ -309,6 +345,14 @@ try {
             'game_version'    => $appVersion,
             'runtime_claimed' => $runtime,
         ]);
+        if (!($result['recovered'] ?? false) && !empty($result['publicActivity'])) {
+            $event=$result['publicActivity'];
+            $event['player_name']=$name;
+            $event['participant_id']=(int)$result['peer'];
+            $event['role']=$result['role'];
+            $event['spectator']=(bool)($result['spectator']??false);
+            $activity->record($result['role']==='host' ? 'public_game_created' : 'public_game_joined', $event);
+        }
         if ($result['role'] === 'host' && !($result['recovered'] ?? false)) {
             notifyLobby('hosted', $result);
         }
@@ -318,6 +362,7 @@ try {
             ['peer', (string)$result['peer']],
             ['session', $result['session']],
             ['role', $result['role']],
+            ['spectator', ($result['spectator']??false) ? '1' : '0'],
             ['maxPeers', (string)$result['maxPeers']],
             ['phase', $result['phase']],
             // The invitation code goes only to somebody who has just proved membership.
@@ -345,14 +390,19 @@ try {
     if ($path === '/v1/admission/list') {
         $offset = array_key_exists('offset', $form)
             ? requireInteger($form, 'offset', 0, Limits::MAX_ROOMS) : 0;
-        $page = $rooms->listPublic($gameProtocol, $contentHash, $offset);
+        $allMods=($form['allMods'] ?? '') === '1';
+        $details=($form['details'] ?? '') === '1';
+        $page = $rooms->listPublic($gameProtocol, $contentHash, $offset, $allMods, $details);
         $lines = [['status', 'ok'], ['protocol', (string)Limits::PROTOCOL_VERSION],
                   ['next', (string)$page['next']]];
         foreach ($page['games'] as $game) {
             // Hex names cannot inject a delimiter or a line break. Private invitations and
             // grants are never part of discovery.
-            $lines[] = ['game', implode('|', [(string)$game['code'], (string)$game['peers'],
-                (string)$game['maxPeers'], (string)$game['mode'], bin2hex((string)$game['hostName'])])];
+            $row=[(string)$game['code'], (string)$game['peers'], (string)$game['maxPeers'],
+                  (string)$game['mode'], bin2hex((string)$game['hostName'])];
+            if ($allMods || $details) { $row[]=(string)$game['contentHash']; $row[]=bin2hex((string)($game['modName'] ?? '')); }
+            if ($details) { $row[]=bin2hex($game['mapName']); $row[]=$game['phase']; $row[]=(string)$game['elapsed']; $row[]=$game['allowLateJoin'] ? '1':'0'; }
+            $lines[] = ['game', implode('|', $row)];
         }
         $http->send(200, $lines, false);
         return;
@@ -361,7 +411,11 @@ try {
     if ($path === '/v1/admission/host') {
         $mode = optionalField($form, 'mode', 'custom');
         $requested = requireInteger($form, 'maxPeers', 2, Limits::MAX_PEERS_PER_ROOM);
+        $modName=isset($form['mod']) && $form['mod']!=='' ? Lobby::decodeText($form['mod'],64) : '';
         $spec = array_merge($claims, [
+            'modName' => $modName,
+            'mapName' => !empty($form['map']) ? Lobby::decodeText($form['map'],120) : '',
+            'allowLateJoin' => ($form['allowLateJoin'] ?? '') === '1',
             'mode'       => $mode,
             'maxPeers'   => $mode === 'coop' ? 2 : $requested,
             'visibility' => optionalField($form, 'visibility', 'private'),
@@ -378,6 +432,29 @@ try {
         return;
     }
 
+    if ($path === '/v1/admission/inspect') {
+        $code = requireField($form, 'room');
+        $result = (new Signaling($store, $config))->inspectRoom($rooms->resolve($code), $code, $claims);
+        $http->send(200, [['status', 'ok'], ['protocol', (string)Limits::PROTOCOL_VERSION],
+            ['room', $result['code']], ['contentHash', $result['contentHash']],
+            ['running', $result['running'] ? '1' : '0']], false);
+        return;
+    }
+
+    if ($path === '/v1/admission/request') {
+        $code=requireField($form,'room'); $roomId=$rooms->resolve($code);
+        $ticket=(new Signaling($store,$config))->requestLateJoin($roomId,$code,array_merge($claims,
+            ['publicOnly'=>optionalField($form,'publicOnly','0')==='1']),requireHexName($form,'name'),optionalField($form,'spectate','0')==='1');
+        $http->send(200,[['status','ok'],['protocol',(string)Limits::PROTOCOL_VERSION],['request',$ticket],['requestState','pending']],false);
+        return;
+    }
+    if ($path === '/v1/admission/request-status') {
+        $answer=(new Signaling($store,$config))->lateJoinStatus(requireField($form,'request'),$claims,optionalField($form,'cancel','0')==='1');
+        $lines=$answer['requestState']==='approved' ? admissionLines($config,$answer,$answer['grant'],false)
+            : [['status','ok'],['protocol',(string)Limits::PROTOCOL_VERSION]];
+        $lines[]=['requestState',$answer['requestState']];
+        $http->send(200,$lines,false); return;
+    }
     if ($path === '/v1/admission/join') {
         $code = requireField($form, 'room');
         $roomId = $rooms->resolve($code);
@@ -397,7 +474,9 @@ try {
         $log->denied($path, $error->errorCode, $http->address());
     }
     if ($http !== null) {
-        $http->sendError($error, $signalingResponse);
+        if ($contentResponse) Content::send($http, $error->status, [
+            ['status', 'error'], ['code', $error->errorCode], ['message', bin2hex($error->getMessage())]]);
+        else $http->sendError($error, $signalingResponse);
     } else {
         http_response_code($error->status);
     }
@@ -415,8 +494,10 @@ try {
         $log->denied($path, 'internal', $http->address());
     }
     if ($http !== null) {
-        $http->sendError(new ServiceError(500, 'internal', 'The request could not be handled.'),
-                         $signalingResponse);
+        if ($contentResponse) Content::send($http, 500, [['status', 'error'], ['code', 'internal'],
+            ['message', bin2hex('The request could not be handled.')]]);
+        else $http->sendError(new ServiceError(500, 'internal', 'The request could not be handled.'),
+                             $signalingResponse);
     } else {
         http_response_code(500);
     }

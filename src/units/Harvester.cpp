@@ -46,9 +46,6 @@
 /* how often to change harvester position while harvesting */
 #define RANDOMHARVESTMOVE 500
 
-/* how much is the harvester movement slowed down when full  */
-#define MAXIMUMHARVESTERSLOWDOWN 0.4_fix
-
 /* number spice output frames - 1 */
 #define LASTSANDFRAME 2
 
@@ -83,7 +80,7 @@ Harvester::Harvester(InputStream& stream) : TrackedUnit(stream)
 void Harvester::init()
 {
     itemID = Unit_Harvester;
-    owner->incrementUnits(itemID);
+    registerUnit();
 
     canAttackStuff = false;
 
@@ -640,18 +637,13 @@ FixPoint Harvester::extractSpice(FixPoint extractionSpeed)
 
 void Harvester::setSpeeds()
 {
-    FixPoint speed = getMaxSpeed();
-
-    if(isBadlyDamaged()) {
-        speed *= HEAVILYDAMAGEDSPEEDMULTIPLIER;
-    }
-
-    FixPoint percentFull = spice/HARVESTERMAXSPICE;
-    speed = speed * (1 - MAXIMUMHARVESTERSLOWDOWN*percentFull);
-
-    if(currentGameMap->getTile(location)->isRoad()) {
-        // Roads boost ground-unit travel speed (city-sim feature).
-        speed *= ROADSPEEDMULTIPLIER;
+    const int cargoPercent = std::clamp((spice*100/HARVESTERMAXSPICE).floor(),0,100);
+    FixPoint speed = getTerrainAdjustedSpeed(cargoPercent);
+    if(itemID != Unit_Harvester) {
+        // Preserve the explicit behavior of mod-only harvester derivatives.
+        speed = getMaxSpeed() * (1-0.4_fix*spice/HARVESTERMAXSPICE);
+        if(isBadlyDamaged()) speed *= HEAVILYDAMAGEDSPEEDMULTIPLIER;
+        if(currentGameMap->getTile(location)->isRoad()) speed *= ROADSPEEDMULTIPLIER;
     }
 
     switch(drawnAngle){
@@ -664,4 +656,17 @@ void Harvester::setSpeeds()
         case DOWN:      xSpeed = 0;                         ySpeed = speed;     break;
         case LEFTDOWN:  xSpeed = -speed*DIAGONALSPEEDCONST; ySpeed = -xSpeed;   break;
     }
+}
+
+// These counters affect refinery selection and carryall requests. Ordinary
+// saves may reset them, but a live viewer must replay the exact same decisions.
+void Harvester::saveObserverRuntime(OutputStream& stream) const {
+    UnitBase::saveObserverRuntime(stream);
+    stream.writeUint8(pathFailCounter);
+    stream.writeUint8(returnPathFailCounter);
+}
+void Harvester::loadObserverRuntime(InputStream& stream) {
+    UnitBase::loadObserverRuntime(stream);
+    pathFailCounter=stream.readUint8();
+    returnPathFailCounter=stream.readUint8();
 }

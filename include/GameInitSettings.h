@@ -30,6 +30,16 @@ class GameInitSettings
 {
 public:
 
+    enum class GraphicsSkin : Uint32 {
+        SimCity = 0,
+        Dune2 = 1
+    };
+
+    static GraphicsSkin sanitizeGraphicsSkin(Uint32 value) {
+        return value == static_cast<Uint32>(GraphicsSkin::Dune2)
+            ? GraphicsSkin::Dune2 : GraphicsSkin::SimCity;
+    }
+
     class PlayerInfo {
     public:
         PlayerInfo(const std::string& newPlayerName, const std::string& newPlayerClass)
@@ -92,6 +102,7 @@ public:
         HOUSETYPE       houseID;
         int             colorOfHouse;
         int             team;
+        GraphicsSkin    graphicsSkin = GraphicsSkin::SimCity;
         PlayerInfoList  playerInfoList;
     };
 
@@ -187,17 +198,37 @@ public:
     inline const std::string& getFilename() const { return filename; };
     inline const std::string& getFiledata() const { return filedata; };
     inline const std::string& getServername() const { return servername; };
+    GameInitSettings networkSnapshot(const std::string& data) const {
+        GameInitSettings result(*this);
+        result.gameType=GameType::LoadMultiplayer;
+        result.filename="online-resume.dls"; result.filedata=data; result.houseInfoList.clear();
+        return result;
+    }
     inline Uint32 getRandomSeed() const { return randomSeed; };
 
     inline bool isMultiplePlayersPerHouse() const { return multiplePlayersPerHouse; };
     inline void setMultiplePlayersPerHouse(bool multiplePlayersPerHouse) { this->multiplePlayersPerHouse = multiplePlayersPerHouse; };
     inline const SettingsClass::GameOptionsClass& getGameOptions() const { return gameOptions; };
+    void setGameOptions(const SettingsClass::GameOptionsClass& options) { gameOptions = options; }
+    inline GraphicsSkin getCampaignGraphicsSkin() const { return campaignGraphicsSkin; };
+    inline void setCampaignGraphicsSkin(GraphicsSkin skin) { campaignGraphicsSkin = skin; };
 
     /// Mod that was active when this game was created. Persisted in
     /// savegames and shipped over the network so clients can mirror the
     /// host's mod choice (e.g. enable city-sim features when the host
     /// is on the dunecity mod).
     inline const std::string& getModName() const { return modName; }
+    const std::string& getModChecksum() const { return modChecksum; }
+    const std::string& getModRevisionHash() const { return modRevisionHash; }
+    const std::string& getMapRevisionHash() const { return mapRevisionHash; }
+    const std::string& getMapRevisionManifest() const { return mapRevisionManifest; }
+    Uint32 getModRevisionVersion() const { return modRevisionVersion; }
+    Uint32 getMapRevisionVersion() const { return mapRevisionVersion; }
+    void setModRevision(const std::string& hash, Uint32 version) { modRevisionHash = hash; modRevisionVersion = version; }
+    void setMapRevision(const std::string& hash, Uint32 version, const std::string& manifest) {
+        mapRevisionHash = hash; mapRevisionVersion = version; mapRevisionManifest = manifest;
+    }
+    void setModIdentity(const std::string& name, const std::string& checksum) { modName = name; modChecksum = checksum; }
     inline void setGameSpeed(int gameSpeed) { gameOptions.gameSpeed = gameSpeed; };
     inline void setImmortalHumanPlayer(bool immortal) { gameOptions.immortalHumanPlayer = immortal; };
 
@@ -240,11 +271,14 @@ private:
     bool            multiplePlayersPerHouse = false;
 
     SettingsClass::GameOptionsClass gameOptions;
+    GraphicsSkin    campaignGraphicsSkin = GraphicsSkin::SimCity;
 
     // Mod info for save/replay compatibility
     std::string     modName = "vanilla";      ///< Name of active mod when game was started
     std::string     modChecksum = "";         ///< Combined mod checksum for verification
 
+    std::string modRevisionHash, mapRevisionHash, mapRevisionManifest;
+    Uint32 modRevisionVersion = 0, mapRevisionVersion = 0;
     HouseInfoList   houseInfoList;
 };
 

@@ -423,9 +423,13 @@ inline GameMessageRule gameMessageRule(std::uint16_t gameMessageType) {
         case 11: rule = {true, SenderRule::Any,        PhaseRule::LobbyOnly}; break; // CONFIG_HASH
         case 12: rule = {true, SenderRule::HostOnly,   PhaseRule::MatchOnly}; break; // SETPATHBUDGET
         case 13: rule = {true, SenderRule::ClientOnly, PhaseRule::MatchOnly}; break; // CLIENTSTATS
+        case 23: rule = {true, SenderRule::HostOnly,   PhaseRule::MatchOnly}; break; // MATCH_CONTROL
+        case 24: rule = {true, SenderRule::ClientOnly, PhaseRule::MatchOnly}; break; // MATCH_RESUME_REQUEST
         case 19: rule = {true, SenderRule::Any,        PhaseRule::Any};       break; // KEEPALIVE
         // Campaign continuation arrives after the previous match, while the session is still
         // marked in-game, so it is allowed in both phases.
+        case 21: rule = {true, SenderRule::HostOnly, PhaseRule::Any}; break; // JOIN_SYNC
+        case 22: rule = {true, SenderRule::ClientOnly, PhaseRule::Any}; break; // JOIN_ACK
         case 20: rule = {true, SenderRule::HostOnly,   PhaseRule::Any};       break; // COOP_MISSION
         // 1 CONNECT, 2 DISCONNECT, 3 PEER_CONNECTED carry addresses; 14..18 are mod transfers.
         // Neither is carried by the relay, and neither has a code path in relay mode.

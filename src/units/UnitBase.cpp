@@ -17,6 +17,7 @@
  */
 
 #include <units/UnitBase.h>
+#include <units/DynastyMovement.h>
 
 #include <globals.h>
 
@@ -88,6 +89,7 @@ UnitBase::UnitBase(House* newOwner) : ObjectBase(newOwner) {
 }
 
 UnitBase::UnitBase(InputStream& stream) : ObjectBase(stream) {
+    restoredFromSave = true;
 
     UnitBase::init();
 
@@ -118,7 +120,11 @@ UnitBase::UnitBase(InputStream& stream) : ObjectBase(stream) {
         Sint32 y = stream.readSint32();
         pathList.emplace_back(x,y);
     }
-    cachedPathDestination = resolvePathDestination();
+    // Objects load in ID order. Resolving a forward target here would clear
+    // its ObjectPointer before that target has been constructed.
+    cachedPathDestination = destination;
+    if(currentGame->getObjectManager().getObject(target.getObjectID()) != nullptr)
+        cachedPathDestination = resolvePathDestination();
     cachedPathRevision = (currentGameMap != nullptr) ? currentGameMap->getPathingRevision() : 0;
     
     // Stuck detection fields are transient (not saved) - they reset on load
@@ -128,13 +134,26 @@ UnitBase::UnitBase(InputStream& stream) : ObjectBase(stream) {
     secondaryWeaponTimer = stream.readSint32();
 
     deviationTimer = stream.readSint32();
+    if(currentGame->getLoadedSavegameVersion() >= 9844) {
+        dynastyRouteTick=stream.readUint64();
+        dynastyStepStart=stream.readUint64(); dynastyStepEnd=stream.readUint64();
+        dynastyStartX=stream.readFixPoint(); dynastyStartY=stream.readFixPoint();
+        dynastyEndpoint.x=stream.readSint32(); dynastyEndpoint.y=stream.readSint32();
+    }
 
-    if(findTargetTimer < 0) {
+
+    // A spectator restores the pending work queues as well as the saved
+    // units. Keep their negative queued-work sentinels until that work runs.
+    if(findTargetTimer < 0 && !currentGame->isSpectating()) {
         findTargetTimer = 0;
     }
-    if(recalculatePathTimer < 0) {
+    if(recalculatePathTimer < 0 && !currentGame->isSpectating()) {
         recalculatePathTimer = 0;
     }
+}
+
+void UnitBase::registerUnit() {
+    currentGame->getHouse(originalHouseID)->incrementUnits(itemID, !restoredFromSave);
 }
 
 void UnitBase::init() {
@@ -206,6 +225,26 @@ void UnitBase::save(OutputStream& stream) const {
     stream.writeSint32(secondaryWeaponTimer);
 
     stream.writeSint32(deviationTimer);
+    stream.writeUint64(dynastyRouteTick);
+    stream.writeUint64(dynastyStepStart); stream.writeUint64(dynastyStepEnd);
+    stream.writeFixPoint(dynastyStartX); stream.writeFixPoint(dynastyStartY);
+    stream.writeSint32(dynastyEndpoint.x); stream.writeSint32(dynastyEndpoint.y);
+}
+
+// Network-only continuation state. Ordinary saved games deliberately reset this.
+void UnitBase::saveObserverRuntime(OutputStream& s) const {
+    s.writeUint8(static_cast<Uint8>(pendingTargetRequest)); s.writeBool(pathRequestQueued);
+    s.writeSint32(cachedPathDestination.x); s.writeSint32(cachedPathDestination.y);
+    s.writeUint32(cachedPathRevision); s.writeFixPoint(lastDistanceToDestination);
+    s.writeUint8(noProgressCount); s.writeSint32(carryallRequestCooldown);
+}
+void UnitBase::loadObserverRuntime(InputStream& s) {
+    const auto kind=s.readUint8();
+    if(kind>static_cast<Uint8>(TargetRequestKind::Acquire)) throw std::runtime_error("Invalid target request");
+    pendingTargetRequest=static_cast<TargetRequestKind>(kind); pathRequestQueued=s.readBool();
+    cachedPathDestination.x=s.readSint32(); cachedPathDestination.y=s.readSint32();
+    cachedPathRevision=s.readUint32(); lastDistanceToDestination=s.readFixPoint();
+    noProgressCount=s.readUint8(); carryallRequestCooldown=s.readSint32();
 }
 
 bool UnitBase::attack() {
@@ -235,11 +274,12 @@ bool UnitBase::attack() {
                 FixPoint distance = distanceFrom(centerPoint, targetCenterPoint);
                 if(distance <= 2*TILESIZE) {
                     currentBulletType = Bullet_ShellSmall;
+                } else {
                     currentWeaponDamage -= currentWeaponDamage/4;
                 }
             } 
             // Dynasty: Launchers and Deviators use same rocket type for both ground and air
-            // Air targets get scatter + tracking + immediate detonation (no timer check) 
+            // Air targets double the arming/steering counter; the impact destination stays fixed.
 
             if(primaryWeaponTimer == 0) {
                 // MULTIPLAYER-SAFE: Track launcher unit firing at ornithopters
@@ -675,7 +715,11 @@ void UnitBase::engageTarget() {
             }
         }
 
-        // we are in attack range
+        // Dynasty launchers/deviators need no facing check for flying targets.
+        // Finish an existing body turn, but do not chase the aircraft with the hull.
+        const bool airMissile = (itemID == Unit_Launcher || itemID == Unit_Deviator)
+            && target.getObjPointer()->isAFlyingUnit();
+        const bool bodyTurnComplete = targetAngle == INVALID || angle == FixPoint(targetAngle);
 
         if(targetFriendly && !forced) {
             // the target is friendly and we only attack these if were forced to do so
@@ -697,10 +741,11 @@ void UnitBase::engageTarget() {
         } else if(!isAFlyingUnit()) {
             // we decide to fire on the target thus we can stop moving
             setDestination(location);
-            targetAngle = newTargetAngle;
+            if(!airMissile) targetAngle = newTargetAngle;
+            else if(bodyTurnComplete) targetAngle = INVALID;
         }
 
-        if(getCurrentAttackAngle() == newTargetAngle) {
+        if(airMissile ? !moving && bodyTurnComplete : getCurrentAttackAngle() == newTargetAngle) {
             attack();
         }
 
@@ -727,16 +772,76 @@ void UnitBase::engageTarget() {
     }
 }
 
+bool UnitBase::usesDynastyGroundTiming() const {
+    return isAGroundUnit() && itemID != Unit_Sandworm && DynastyMovement::factor(itemID) != 0;
+}
+
+Coord UnitBase::movementEndpoint() const {
+    return Coord(nextSpot.x*TILESIZE+TILESIZE/2, nextSpot.y*TILESIZE+TILESIZE/2);
+}
+
+bool UnitBase::beginDynastyStep(Uint64 routeTick) {
+    const auto* tile=currentGameMap->getTile(nextSpot);
+    const int cargo=itemID==Unit_Harvester
+        ? std::clamp((static_cast<Harvester*>(this)->getAmountOfSpice()*100/HARVESTERMAXSPICE).floor(),0,100) : 0;
+    const int step=DynastyMovement::step(itemID,
+        DynastyMovement::throttle(itemID,static_cast<TERRAINTYPE>(tile->getType())),
+        getHealth()<getMaxHealth()/2,cargo);
+    const int ticks=DynastyMovement::movementTicks(step, location.x!=nextSpot.x && location.y!=nextSpot.y);
+    if(ticks==0 || getMaxSpeed()<=0) return false;
+    // One Dynasty coordinate unit per20Hz movement tick is0.08 world
+    // units per16ms cycle (64/256 *20 *0.016). INI caps remain configurable.
+    const FixPoint referenceCap=DynastyMovement::step(itemID,255,false,0)*0.08_fix;
+    FixPoint scale=getMaxSpeed()/referenceCap;
+    if(tile->isRoad()) scale*=ROADSPEEDMULTIPLIER;
+    dynastyStepStart=routeTick*50;
+    // Movement precedes scripting: the first movement tick is strictly after
+    // the route call, then every3 ticks, independently of rendering cadence.
+    const Uint64 duration=(routeTick/3*3+ticks*3-routeTick)*50;
+    dynastyStepEnd=dynastyStepStart+std::max<Uint64>(1,lround(FixPoint(static_cast<int>(duration))/scale));
+    dynastyStartX=realX-bumpyOffsetX; dynastyStartY=realY-bumpyOffsetY;
+    return true;
+}
+
+bool UnitBase::moveDynastyStep() {
+    if(!moving || !usesDynastyGroundTiming()) { dynastyStepEnd=0; return false; }
+    if(dynastyStepEnd==0) return false; // Pre-9844 save: finish its existing step.
+    const Uint64 now=static_cast<Uint64>(currentGame->getGameCycleCount())*(GAMESPEED_DEFAULT*3);
+    const auto elapsed=now>dynastyStepStart ? now-dynastyStepStart : 0;
+    const auto duration=dynastyStepEnd-dynastyStepStart;
+    const FixPoint progress=FixPoint(static_cast<int>(std::min(elapsed,duration)))/static_cast<int>(duration);
+    realX=dynastyStartX+(dynastyEndpoint.x-dynastyStartX)*progress+bumpyOffsetX;
+    realY=dynastyStartY+(dynastyEndpoint.y-dynastyStartY)*progress+bumpyOffsetY;
+    if(location!=nextSpot && progress>=0.5_fix) {
+        unassignFromMap(location); oldLocation=location; location=nextSpot;
+        if(auto* grid=currentGame->getSpatialGrid()) grid->move(*this,getGridHandle(),oldLocation,location);
+        currentGameMap->viewMap(owner->getHouseID(),location,getViewRange());
+    }
+    if(now>=dynastyStepEnd) {
+        realX=dynastyEndpoint.x; realY=dynastyEndpoint.y;
+        bumpyOffsetX=0; bumpyOffsetY=0;
+        moving=false; justStoppedMoving=true; dynastyStepEnd=0;
+        oldLocation.invalidate();
+        if(forced && location==destination && !target) {
+            setForced(false);
+            if(getAttackMode()==CARRYALLREQUESTED) doSetAttackMode(GUARD);
+        }
+    }
+    if(moving) bumpyMovementOnRock(FixPoint::abs(realX-bumpyOffsetX-dynastyStartX),
+        FixPoint::abs(realY-bumpyOffsetY-dynastyStartY),
+        FixPoint::abs(dynastyEndpoint.x-realX+bumpyOffsetX),
+        FixPoint::abs(dynastyEndpoint.y-realY+bumpyOffsetY));
+    checkPos();
+    return true;
+}
+
 void UnitBase::move() {
+    if(moveDynastyStep()) return;
 
     if(moving && !justStoppedMoving) {
-        if((isBadlyDamaged() == false) || isAFlyingUnit()) {
-            realX += xSpeed;
-            realY += ySpeed;
-        } else {
-            realX += xSpeed/2;
-            realY += ySpeed/2;
-        }
+        const int legacyDamageDivisor = DynastyMovement::factor(itemID)==0 && !isAFlyingUnit() && isBadlyDamaged() ? 2 : 1;
+        realX += xSpeed/legacyDamageDivisor;
+        realY += ySpeed/legacyDamageDivisor;
 
         // check if vehicle is on the first half of the way
         FixPoint fromDistanceX;
@@ -852,15 +957,40 @@ void UnitBase::bumpyMovementOnRock(FixPoint fromDistanceX, FixPoint fromDistance
 
 void UnitBase::navigate() {
 
-    if(isAFlyingUnit() || (((currentGame->getGameCycleCount() + getObjectID()*1337) % 5) == 0)) {
-        // navigation is only performed every 5th frame
+    const bool dynasty=usesDynastyGroundTiming();
+    const Uint64 now=static_cast<Uint64>(currentGame->getGameCycleCount())*(GAMESPEED_DEFAULT*3);
+    Uint64 routeTick=0;
+    bool routeDue=false;
+    if(dynasty) {
+        if(!moving && location==destination) {
+            dynastyRouteTick=0;
+            routeDue=((currentGame->getGameCycleCount()+getObjectID()*1337)%5)==0;
+        }
+        else {
+            if(dynastyRouteTick==0) {
+                // UNIT.EMC enters the move loop on its first script update
+                // for harvesters/MCVs and the following update for combat units.
+                dynastyRouteTick=((now+249)/250)*5 + ((itemID==Unit_Harvester || itemID==Unit_MCV) ? 0 : 5);
+                if(dynastyRouteTick==0) dynastyRouteTick=5;
+            }
+            routeTick=dynastyRouteTick;
+            if(now>=routeTick*50) { routeDue=true; dynastyRouteTick+=15; }
+            // Resolve the async path before the next script opportunity.
+            if(!moving && !nextSpotFound && pathList.empty() && recalculatePathTimer==0 && !pathRequestQueued)
+                enqueuePathRequest();
+        }
+    }
+    if((dynasty && routeDue) || (!dynasty && (isAFlyingUnit() || (((currentGame->getGameCycleCount() + getObjectID()*1337) % 5) == 0)))) {
+        // Standard ground routes use the15-tick script loop; extensions retain
+        // the Legacy navigation cadence.
 
-        if(!moving && !justStoppedMoving) {
+        if(!moving && (dynasty || !justStoppedMoving)) {
             if(!pathList.empty() && !isCachedPathStillValid()) {
                 clearPath();
             }
             
             if(location != destination) {
+                const bool hadNextSpot=nextSpotFound;
                 if(nextSpotFound == false)  {
 
                     if(pathList.empty() && (recalculatePathTimer == 0) && !pathRequestQueued) {
@@ -881,7 +1011,8 @@ void UnitBase::navigate() {
                             currentGame->frameTiming.pauseRecalcCooldown++;
                         }
                     }
-                } else {
+                }
+                if(nextSpotFound && (dynasty || hadNextSpot)) {
                     int tempAngle = currentGameMap->getPosAngle(location, nextSpot);
                     if(tempAngle != INVALID) {
                         nextSpotAngle = tempAngle;
@@ -909,13 +1040,15 @@ void UnitBase::navigate() {
                         // Static blocker, structure, or out-of-bounds - clear path and reroute
                         clearPath();
                     } else {
-                        if (drawnAngle == nextSpotAngle)    {
+                        if (dynasty ? angle==FixPoint(nextSpotAngle) : drawnAngle==nextSpotAngle) {
+                            if(dynasty && !beginDynastyStep(routeTick)) return;
                             moving = true;
                             nextSpotFound = false;
 
                             assignToMap(nextSpot);
                             angle = drawnAngle;
                             setSpeeds();
+                            if(dynasty) dynastyEndpoint=movementEndpoint();
                         } else {
                             // Unit needs to turn to face next waypoint
                             currentGame->frameTiming.pauseTurningToFace++;
@@ -942,12 +1075,18 @@ void UnitBase::idleAction() {
     }
 }
 
+ObjectBase* UnitBase::getActionClickTarget(int xPos, int yPos) const {
+    const auto* tile=currentGameMap->tileExists(xPos,yPos) ? currentGameMap->getTile(xPos,yPos) : nullptr;
+    if(!tile || !tile->isExploredByTeam(owner->getTeamID()) || tile->isFoggedByTeam(owner->getTeamID())) return nullptr;
+    auto* object=tile->getObject();
+    return object && object->isVisible(owner->getTeamID()) ? object : nullptr;
+}
+
 void UnitBase::handleActionClick(int xPos, int yPos) {
     if(respondable) {
         if(currentGameMap->tileExists(xPos, yPos)) {
-            if(currentGameMap->getTile(xPos,yPos)->hasAnObject()) {
-                // attack unit/structure or move to structure
-                ObjectBase* tempTarget = currentGameMap->getTile(xPos,yPos)->getObject();
+            if(ObjectBase* tempTarget = getActionClickTarget(xPos,yPos)) {
+                // Attack/follow only a visible target, as shown by the cursor.
 
                 if(tempTarget->getOwner()->getTeamID() != getOwner()->getTeamID()) {
                     // attack
@@ -1357,6 +1496,7 @@ void UnitBase::setLocation(int xPos, int yPos) {
     }
 
     moving = false;
+    dynastyRouteTick=0; dynastyStepEnd=0;
     pickedUp = false;
     setTarget(nullptr);
 
@@ -1391,6 +1531,7 @@ void UnitBase::setPickedUp(UnitBase* newCarrier) {
     goingToRepairYard = false;
     forced = false;
     moving = false;
+    dynastyRouteTick=0; dynastyStepEnd=0;
     pickedUp = true;
     respondable = false;
     setActive(false);
@@ -1403,20 +1544,30 @@ FixPoint UnitBase::getMaxSpeed() const {
     return currentGame->objectData.data[itemID][originalHouseID].maxspeed;
 }
 
-void UnitBase::setSpeeds() {
+FixPoint UnitBase::getTerrainAdjustedSpeed(int cargoPercent) const {
     FixPoint speed = getMaxSpeed();
-
-    if(!isAFlyingUnit()) {
-        const Tile* pTile = currentGameMap->getTile(location);
-        speed += speed*(1 - getTerrainDifficulty((TERRAINTYPE) pTile->getType()));
-        if(pTile->isRoad()) {
-            // Roads boost ground-unit travel speed (city-sim feature).
-            speed *= ROADSPEEDMULTIPLIER;
-        }
-        if(isBadlyDamaged()) {
-            speed *= HEAVILYDAMAGEDSPEEDMULTIPLIER;
-        }
+    if(isAFlyingUnit()) return speed;
+    // Dynasty selects the terrain of the tile being entered.
+    const bool dynastyUnit = DynastyMovement::factor(itemID) != 0;
+    const Coord speedTile = dynastyUnit && nextSpot.isValid() && currentGameMap->tileExists(nextSpot) ? nextSpot : location;
+    const Tile* tile = currentGameMap->getTile(speedTile);
+    if(dynastyUnit) {
+        const int base = DynastyMovement::step(itemID,255,false,0);
+        const int step = DynastyMovement::step(itemID,
+            DynastyMovement::throttle(itemID,static_cast<TERRAINTYPE>(tile->getType())),
+            getHealth() < getMaxHealth()/2,cargoPercent);
+        speed = speed * step / base;
+    } else {
+        speed *= 2-getTerrainDifficulty(static_cast<TERRAINTYPE>(currentGameMap->getTile(location)->getType()));
+        if(isBadlyDamaged()) speed *= HEAVILYDAMAGEDSPEEDMULTIPLIER;
     }
+    // City roads are an intentional extension; Dynasty has no equivalent.
+    if(tile->isRoad()) speed *= ROADSPEEDMULTIPLIER;
+    return speed;
+}
+
+void UnitBase::setSpeeds() {
+    const FixPoint speed = getTerrainAdjustedSpeed();
 
     switch(drawnAngle){
         case LEFT:      xSpeed = -speed;                    ySpeed = 0;         break;
@@ -1737,8 +1888,24 @@ UnitBase::PathRequestStats UnitBase::resolvePendingPathRequest() {
     return stats;
 }
 
+bool UnitBase::turnDynastyBody(int wantedAngle) {
+    if(!usesDynastyGroundTiming() || dynastyRouteTick==0) return false;
+    const Uint64 now=static_cast<Uint64>(currentGame->getGameCycleCount())*(GAMESPEED_DEFAULT*3);
+    if(now>0 && now/200==(now-GAMESPEED_DEFAULT*3)/200) return true;
+    FixPoint difference=FixPoint(wantedAngle)-angle;
+    while(difference>4) difference-=8;
+    while(difference< -4) difference+=8;
+    const FixPoint step=currentGame->objectData.data[itemID][originalHouseID].turnspeed*25/6;
+    if(FixPoint::abs(difference)<=step+0.00001_fix) angle=wantedAngle;
+    else angle += difference>0 ? step : -step;
+    while(angle<0) angle+=8;
+    while(angle>=8) angle-=8;
+    drawnAngle=lround(angle)%8;
+    return true;
+}
+
 void UnitBase::turn() {
-    if(!moving && !justStoppedMoving) {
+    if(!moving && (usesDynastyGroundTiming() || !justStoppedMoving)) {
         int wantedAngle = INVALID;
 
         // if we have to decide between moving and shooting we opt for moving
@@ -1749,6 +1916,7 @@ void UnitBase::turn() {
         }
 
         if(wantedAngle != INVALID) {
+            if(turnDynastyBody(wantedAngle)) return;
             FixPoint angleLeft = 0;
             FixPoint angleRight = 0;
 
@@ -1760,7 +1928,10 @@ void UnitBase::turn() {
                 angleLeft = wantedAngle - angle;
             }
 
-            if(angleLeft <= angleRight) {
+            const FixPoint speed=currentGame->objectData.data[itemID][originalHouseID].turnspeed;
+            if(usesDynastyGroundTiming() && std::min(angleLeft,angleRight)<=speed) {
+                angle=wantedAngle; drawnAngle=wantedAngle;
+            } else if(angleLeft <= angleRight) {
                 turnLeft();
             } else {
                 turnRight();
@@ -1812,9 +1983,24 @@ bool UnitBase::update() {
         currentGame->frameTiming.unitTargetingMs += targetMs;
         currentGame->frameTiming.unitTargetingMsThisFrame += targetMs;
         
+        // Dynasty updates movement and body rotation before its route script.
+        // In particular, a tile arrival can start the next step on this tick.
+        const bool dynastyTiming=usesDynastyGroundTiming();
+        if(dynastyTiming) {
+            const Uint64 earlyMoveStart=SDL_GetPerformanceCounter();
+            move();
+            const Uint64 earlyTurnStart=SDL_GetPerformanceCounter();
+            const double earlyMoveMs=currentGame->getElapsedMs(earlyMoveStart,earlyTurnStart);
+            currentGame->frameTiming.unitMoveMs+=earlyMoveMs;
+            currentGame->frameTiming.unitMoveMsThisFrame+=earlyMoveMs;
+            if(active) turn();
+            const double earlyTurnMs=currentGame->getElapsedMs(earlyTurnStart,SDL_GetPerformanceCounter());
+            currentGame->frameTiming.unitTurnMs+=earlyTurnMs;
+            currentGame->frameTiming.unitTurnMsThisFrame+=earlyTurnMs;
+        }
         // Time navigate
         Uint64 navStart = SDL_GetPerformanceCounter();
-        navigate();
+        if(active) navigate();
         Uint64 navEnd = SDL_GetPerformanceCounter();
         double navMs = currentGame->getElapsedMs(navStart, navEnd);
         currentGame->frameTiming.unitNavigateMs += navMs;
@@ -1822,7 +2008,7 @@ bool UnitBase::update() {
         
         // Time move
         Uint64 moveStart = SDL_GetPerformanceCounter();
-        move();
+        if(!dynastyTiming) move();
         Uint64 moveEnd = SDL_GetPerformanceCounter();
         double moveMs = currentGame->getElapsedMs(moveStart, moveEnd);
         currentGame->frameTiming.unitMoveMs += moveMs;
@@ -1831,7 +2017,7 @@ bool UnitBase::update() {
         if(active) {
             // Time turn
             Uint64 turnStart = SDL_GetPerformanceCounter();
-            turn();
+            if(!dynastyTiming) turn();
             Uint64 turnEnd = SDL_GetPerformanceCounter();
             double turnMs = currentGame->getElapsedMs(turnStart, turnEnd);
             currentGame->frameTiming.unitTurnMs += turnMs;

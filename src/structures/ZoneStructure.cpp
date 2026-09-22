@@ -69,6 +69,18 @@ void ZoneStructure::updateStructureSpecificStuff() {
 
     const int density = pTile->getCityZoneDensity();
     skinDensity_ = density;
+    if(zoneType_ == DuneCity::ZoneType::Residential) {
+        const int population = DuneCity::ResidentialPopulation::normalize(
+            getResidentialPopulation());
+        if(population > 0 && population <= 8) {
+            // Stefan's current simulation represents the first eight residents
+            // as individual houses while the engine density remains zero.
+            // The authored Dune2 skin has four visual growth stages, so walk
+            // those stages across the house stack. At population 16 the native
+            // apartment-density sequence starts at stage one again.
+            skinDensity_ = std::clamp((population * 3 + 7) / 8, 1, 3);
+        }
+    }
 
     // Civic overlay: hospital/church sprites replace the normal zone art.
     // These are single-cell (1×1) atlases loaded as ObjPic_Hospital/Church.
@@ -113,17 +125,42 @@ void ZoneStructure::updateStructureSpecificStuff() {
 }
 
 void ZoneStructure::blitToScreen() {
-    StructureBase::blitToScreen();
-    if(fogged || civicOverlay_ != CivicOverlay::None || owner == nullptr || currentGame == nullptr) {
-        return;
+    // A Dune2 Compact replaces the SimCity zone cell; it is not an overlay.
+    // Drawing StructureBase first leaves the native coloured R/C/I lot visible
+    // through every transparent Compact pixel. Prefer the manifest draw as the
+    // sole zone image and retain the native path only as a safe fallback.
+    if(!fogged && civicOverlay_ == CivicOverlay::None
+       && owner != nullptr && currentGame != nullptr
+       && pGFXManager->isDuneCityHouseUsingDune2(owner->getHouseID())) {
+        const int anchorX = screenborder->world2screenX(
+            lround(realX) + structureSize.x * TILESIZE / 2);
+        const int anchorY = screenborder->world2screenY(
+            lround(realY) + structureSize.y * TILESIZE);
+        if(pGFXManager->drawDuneCityZone(
+            itemID, owner->getHouseID(), currentZoomlevel,
+            skinDensity_, skinValueTier_, GFXManager::DuneCityZoneActivity::Idle,
+            0, anchorX, anchorY)) {
+            return;
+        }
     }
-    const int anchorX = screenborder->world2screenX(
-        lround(realX) + structureSize.x * TILESIZE / 2);
-    const int anchorY = screenborder->world2screenY(
-        lround(realY) + structureSize.y * TILESIZE);
-    pGFXManager->drawDuneCityZone(
-        itemID, owner->getHouseID(), currentZoomlevel,
-        skinDensity_, skinValueTier_, GFXManager::DuneCityZoneActivity::Idle, 0, anchorX, anchorY);
+    StructureBase::blitToScreen();
+}
+
+void ZoneStructure::drawPreview(const SDL_Rect& bounds) const {
+    if(!owner || numImagesX <= 0 || numImagesY <= 0 || bounds.w <= 0 || bounds.h <= 0) return;
+    auto* texture = pGFXManager->getObjPic(graphicID, owner->getHouseID())[1];
+    if(!texture) return;
+    const int frame = fogged ? lastVisibleFrame : curAnimFrame;
+    const auto source = calcSpriteSourceRect(texture, frame % numImagesX, numImagesX,
+                                             frame / numImagesX, numImagesY);
+    const double scale = std::min(double(bounds.w) / source.w, double(bounds.h) / source.h);
+    SDL_Rect destination{0,0,int(source.w*scale),int(source.h*scale)};
+    destination.x = bounds.x + (bounds.w-destination.w)/2;
+    destination.y = bounds.y + (bounds.h-destination.h)/2;
+    SDL_RenderCopy(renderer, texture, &source, &destination);
+    if(!fogged && civicOverlay_ == CivicOverlay::None)
+        pGFXManager->drawDuneCityZone(itemID, owner->getHouseID(), 1, skinDensity_, skinValueTier_,
+            GFXManager::DuneCityZoneActivity::Idle, 0, 0, 0, &bounds);
 }
 
 void ZoneStructure::refreshZonePowerDraw() {

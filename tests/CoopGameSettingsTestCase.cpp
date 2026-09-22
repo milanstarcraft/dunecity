@@ -19,8 +19,10 @@ char getHouseScenarioLetter(HOUSETYPE house) {
 static GameInitSettings makeCoop(bool campaign, bool bot) {
     GameInitSettings init(HOUSE_ATREIDES, 8, SettingsClass::GameOptionsClass{});
     init.enableCoop(campaign, "Test co-op");
+    init.setCampaignGraphicsSkin(GameInitSettings::GraphicsSkin::Dune2);
     init.setScenarioData("[Atreides]\nBrain=Human\n[Sardaukar]\nBrain=CPU\n");
     GameInitSettings::HouseInfo human(HOUSE_ATREIDES, 1);
+    human.graphicsSkin = GameInitSettings::GraphicsSkin::Dune2;
     human.addPlayerInfo({"Host", HUMANPLAYERCLASS});
     human.addPlayerInfo({"Partner", bot ? "qBotSupportBrutal" : HUMANPLAYERCLASS});
     init.addHouseInfo(human);
@@ -47,6 +49,9 @@ TEST_CASE("Co-op settings preserve shared control, scenario identity and seed ov
     REQUIRE(client.getHouseInfoList().size() == 2);
     const auto& shared = client.getHouseInfoList().front();
     REQUIRE(shared.team == 1);
+    REQUIRE(shared.graphicsSkin == GameInitSettings::GraphicsSkin::Dune2);
+    REQUIRE(client.getHouseInfoList().back().graphicsSkin == GameInitSettings::GraphicsSkin::SimCity);
+    REQUIRE(client.getCampaignGraphicsSkin() == GameInitSettings::GraphicsSkin::Dune2);
     REQUIRE(shared.playerInfoList.size() == 2);
     REQUIRE(shared.playerInfoList.back().playerClass == (bot ? "qBotSupportBrutal" : HUMANPLAYERCLASS));
     REQUIRE(client.getHouseInfoList().back().houseID == HOUSE_SARDAUKAR);
@@ -58,6 +63,7 @@ TEST_CASE("Next co-op mission retains controllers and progress but discards old 
     const auto previous = makeCoop(true, bot);
     GameInitSettings next(previous, 11, 0x123, 0x42);
     REQUIRE(next.getGameType() == GameType::CampaignCoop);
+    REQUIRE(next.getCampaignGraphicsSkin() == GameInitSettings::GraphicsSkin::Dune2);
     REQUIRE(next.getFilename() == "SCENA011.INI");
     REQUIRE(next.getFiledata().empty());
     REQUIRE(next.getAlreadyPlayedRegions() == 0x123);
@@ -91,6 +97,8 @@ TEST_CASE("Campaign save lobby reads mod header and setup colors without consumi
     REQUIRE(parsed.getGameType() == GameType::Campaign);
     REQUIRE(parsed.getHouseID() == HOUSE_ATREIDES);
     REQUIRE(houses.size() == 2);
+    REQUIRE(houses.front().graphicsSkin == GameInitSettings::GraphicsSkin::Dune2);
+    REQUIRE(houses.back().graphicsSkin == GameInitSettings::GraphicsSkin::SimCity);
     REQUIRE(houses.back().houseID == HOUSE_SARDAUKAR);
     REQUIRE(in.readUint32() == 0xabcdef01);
 }
@@ -112,6 +120,8 @@ TEST_CASE("Hosting an existing campaign preserves progress and missing future en
     loaded.configureCoopSave(saved, actual);
     loaded.enableCoop(true, "Hosted campaign");
     REQUIRE(loaded.getGameType() == GameType::LoadCoop);
+    REQUIRE(loaded.getCampaignGraphicsSkin() == GameInitSettings::GraphicsSkin::Dune2);
+    REQUIRE(loaded.getHouseInfoList().front().graphicsSkin == GameInitSettings::GraphicsSkin::Dune2);
     REQUIRE(loaded.getHouseID() == HOUSE_ATREIDES);
     REQUIRE(loaded.getMission() == saved.getMission());
     REQUIRE(loaded.getFiledata() == bytes);
@@ -143,4 +153,50 @@ TEST_CASE("Campaign start levels choose the first scenario and retain campaign p
 TEST_CASE("Invalid campaign start levels fail before loading a scenario", "[campaign]") {
     const int level = GENERATE(-1, 0, 10, 22);
     REQUIRE_THROWS_AS(GameInitSettings(HOUSE_ATREIDES, SettingsClass::GameOptionsClass{}, level), std::invalid_argument);
+}
+
+TEST_CASE("Workshop revisions survive game settings and checkpoint copies", "[workshop][network][save]") {
+    auto original = makeCoop(true, false);
+    original.setModRevision(std::string(64, 'a'), 7);
+    original.setMapRevision(std::string(64, 'b'), 12, "map manifest");
+    OMemoryStream out; out.open(); original.save(out);
+    IMemoryStream in(out.getData(), out.getDataLength());
+    GameInitSettings restored(in);
+    REQUIRE(restored.getModRevisionHash() == original.getModRevisionHash());
+    REQUIRE(restored.getModRevisionVersion() == 7);
+    REQUIRE(restored.getMapRevisionHash() == original.getMapRevisionHash());
+    REQUIRE(restored.getMapRevisionVersion() == 12);
+    REQUIRE(restored.getMapRevisionManifest() == "map manifest");
+    const auto checkpoint = restored.networkSnapshot("saved simulation bytes");
+    REQUIRE(checkpoint.getGameType() == GameType::LoadMultiplayer);
+    REQUIRE(checkpoint.getModRevisionHash() == original.getModRevisionHash());
+    GameInitSettings next(original, 11, 0, 0);
+    REQUIRE(next.getModRevisionHash() == original.getModRevisionHash());
+}
+
+TEST_CASE("Legacy MOD3 remains readable and truncated MOD5 fails closed", "[workshop][save]") {
+    auto original = makeCoop(false, true);
+    OMemoryStream out; out.open(); original.save(out);
+    std::string bytes(reinterpret_cast<const char*>(out.getData()), out.getDataLength());
+    const auto marker = bytes.find("5DOM");
+    REQUIRE(marker != std::string::npos);
+    SECTION("old graphics marker") {
+        bytes[marker] = '3';
+        bytes.resize(bytes.size() - 24); // three strings, two revision integers, yard limit
+        IMemoryStream in(bytes.data(), bytes.size());
+        GameInitSettings restored(in);
+        REQUIRE(restored.getModRevisionHash().empty());
+        REQUIRE(restored.getCampaignGraphicsSkin() == original.getCampaignGraphicsSkin());
+    }
+    SECTION("new descriptor truncated") {
+        bytes.pop_back();
+        IMemoryStream in(bytes.data(), bytes.size());
+        REQUIRE_THROWS(GameInitSettings(in));
+    }
+    SECTION("invalid revision hash") {
+        original.setModRevision("../../untrusted", 1);
+        OMemoryStream invalid; invalid.open(); original.save(invalid);
+        IMemoryStream in(invalid.getData(), invalid.getDataLength());
+        REQUIRE_THROWS(GameInitSettings(in));
+    }
 }

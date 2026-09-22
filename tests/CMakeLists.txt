@@ -10,13 +10,21 @@ add_executable(dunelegacy_tests)
 # Note: Catch2WithMain provides main(), no testmain.cpp needed
 target_sources(dunelegacy_tests
     PRIVATE
+        WorkshopStoreTestCase.cpp
+        ${CMAKE_SOURCE_DIR}/src/mod/WorkshopStore.cpp
+        SnapshotTransferTestCase.cpp
+        ${CMAKE_SOURCE_DIR}/src/Network/SnapshotTransfer.cpp
         CoopGameSettingsTestCase.cpp
         ${CMAKE_SOURCE_DIR}/src/GameInitSettings.cpp
         ${CMAKE_SOURCE_DIR}/src/misc/IFileStream.cpp
         CityTrafficPolicyTestCase.cpp
         CitySpritePolicyTestCase.cpp
         RendererSizeTestCase.cpp
+        CursorAppearanceTestCase.cpp
         QuantBotBuildPolicyTestCase.cpp
+        QuantBotCityPolicyTestCase.cpp
+        MatchControlTestCase.cpp
+        QuantBotCityCampaignPolicyTestCase.cpp
         AIDecisionLogTestCase.cpp
         CityPlacementPolicyTestCase.cpp
         GroundAccessPolicyTestCase.cpp
@@ -37,6 +45,8 @@ target_sources(dunelegacy_tests
         RelayProtocolTestCase/ContentCompatibilityTestCase.cpp
         CommandEmissionTestCase/CommandEmissionTestCase.cpp
         CommandBufferPolicyTestCase/CommandBufferPolicyTestCase.cpp
+        # WebRTC multiplayer transport framing (browser multiplayer foundation).
+        PacketStreamTestCase/PacketStreamTestCase.cpp
         GenericNinthHouseRegressionTestCase/GenericNinthHouseRegressionTestCase.cpp
         ZoneStructureTestCase/ZoneStructureTestCase.cpp
         RoadPlacementTestCase/RoadPlacementTestCase.cpp
@@ -105,6 +115,10 @@ target_include_directories(dunelegacy_tests
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_SOURCE_DIR}/src/enet  # For enet headers
         ${CMAKE_SOURCE_DIR}/src      # For audio/sounds.h and other src-level headers
+        # p2pkit SDK headers (path + install guard defined in the top-level
+        # CMakeLists.txt): PacketStreamTestCase drives NetworkPacketBuffer/
+        # NetworkPacketView, which are thin adapters over them.
+        ${DUNECITY_P2PKIT_DIR}/emscripten/include
 )
 
 # Link libraries
@@ -114,6 +128,7 @@ target_link_libraries(dunelegacy_tests
         SDL2::SDL2
         $<IF:$<TARGET_EXISTS:SDL2_mixer::SDL2_mixer>,SDL2_mixer::SDL2_mixer,SDL2_mixer::SDL2_mixer-static>
         CURL::libcurl
+        ZLIB::ZLIB
 )
 
 if(APPLE)
@@ -158,6 +173,7 @@ add_test(NAME lobby_authorization_tests COMMAND dunelegacy_tests "[lobby][securi
 # Emscripten where size_t is 32 bits). It needs no game data and no Catch2.
 add_executable(network_wire_harness
     wasm/NetworkWireHarness.cpp
+    ${CMAKE_SOURCE_DIR}/src/Network/SnapshotTransfer.cpp
     ${CMAKE_SOURCE_DIR}/src/misc/format.cpp
     ${CMAKE_SOURCE_DIR}/src/enet/callbacks.c
     ${CMAKE_SOURCE_DIR}/src/enet/compress.c
@@ -180,6 +196,7 @@ target_include_directories(network_wire_harness
 
 target_link_libraries(network_wire_harness
     PRIVATE
+        ZLIB::ZLIB
         SDL2::SDL2
         $<IF:$<TARGET_EXISTS:SDL2_mixer::SDL2_mixer>,SDL2_mixer::SDL2_mixer,SDL2_mixer::SDL2_mixer-static>
 )
@@ -377,5 +394,42 @@ if(APPLE AND CMAKE_GENERATOR STREQUAL "Ninja")
             ${CMAKE_SOURCE_DIR}/tests/menu/run-menu-probe.py
             --build-dir ${CMAKE_BINARY_DIR} --output-dir ${CMAKE_BINARY_DIR}/menu-probe)
         set_tests_properties(menu_navigation_probe PROPERTIES TIMEOUT 300 RUN_SERIAL TRUE)
+        add_test(NAME game_command_regressions COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_SOURCE_DIR}/tests/network/run-command-execution-probe.py
+            --build-dir ${CMAKE_BINARY_DIR} --output-dir ${CMAKE_BINARY_DIR}/command-probe)
+        set_tests_properties(game_command_regressions PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
+        add_test(NAME carryall_flight_probe COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_SOURCE_DIR}/tests/units/run-carryall-flight-probe.py
+            --build-dir ${CMAKE_BINARY_DIR} --output-dir ${CMAKE_BINARY_DIR}/carryall-flight-probe)
+        set_tests_properties(carryall_flight_probe PROPERTIES TIMEOUT 300 RUN_SERIAL TRUE)
+        add_test(NAME unit_speed_probe COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_SOURCE_DIR}/tests/units/run-unit-speed-probe.py
+            --build-dir ${CMAKE_BINARY_DIR} --output-dir ${CMAKE_BINARY_DIR}/unit-speed-probe)
+        set_tests_properties(unit_speed_probe PROPERTIES TIMEOUT 300 RUN_SERIAL TRUE)
+        add_test(NAME unit_route_continuation_probe COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_SOURCE_DIR}/tests/units/run-unit-route-probe.py
+            --build-dir ${CMAKE_BINARY_DIR} --continuation
+            --output-dir ${CMAKE_BINARY_DIR}/unit-route-continuation-probe)
+        set_tests_properties(unit_route_continuation_probe PROPERTIES TIMEOUT 300 RUN_SERIAL TRUE)
+        foreach(projectile_probe IN ITEMS mechanics combat continuation)
+            if(projectile_probe STREQUAL "mechanics")
+                set(projectile_flag --projectiles)
+            else()
+                set(projectile_flag --projectile-${projectile_probe})
+            endif()
+            add_test(NAME projectile_${projectile_probe}_probe COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/units/run-unit-route-probe.py
+                --build-dir ${CMAKE_BINARY_DIR} ${projectile_flag}
+                --output-dir ${CMAKE_BINARY_DIR}/projectile-${projectile_probe}-probe)
+            set_tests_properties(projectile_${projectile_probe}_probe PROPERTIES TIMEOUT 300 RUN_SERIAL TRUE)
+        endforeach()
+        add_test(NAME quantbot_custom_attack COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_SOURCE_DIR}/tests/ai/run-campaign-balance.py --custom-attack-probe --repeatable
+            --build-dir ${CMAKE_BINARY_DIR} --output-dir ${CMAKE_BINARY_DIR}/custom-attack-probe)
+        set_tests_properties(quantbot_custom_attack PROPERTIES TIMEOUT 180 RUN_SERIAL TRUE)
     endif()
+endif()
+
+if(NOT EMSCRIPTEN AND NOT ANDROID)
+    add_subdirectory(desktop-updater)
 endif()

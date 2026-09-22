@@ -18,6 +18,7 @@
 #include <FileClasses/PictureFactory.h>
 
 #include <globals.h>
+#include <GUI/dune/DuneStyle.h>
 #include <sand.h>
 
 #include <config.h>
@@ -518,6 +519,9 @@ sdl2::surface_ptr PictureFactory::createMainBackground() const {
 }
 
 sdl2::surface_ptr PictureFactory::createGameStatsBackground(int House) const {
+    // Keep the classic FAME.CPS stats panel (see the gameStatsBackground setup
+    // in the constructor): the debriefing widgets are laid out against its
+    // frame, so a flat generated background leaves the screen empty.
     auto pSurface = copySurface(gameStatsBackground.get());
 
     sdl2::surface_ptr pLogo;

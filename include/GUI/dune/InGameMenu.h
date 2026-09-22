@@ -25,6 +25,11 @@
 #include <GUI/Spacer.h>
 #include <GUI/Label.h>
 
+class InGameMenuButton : public TextButton {
+public:
+    Point getMinimumSize() const override;
+};
+
 class InGameMenu : public Window
 {
 public:
@@ -39,6 +44,13 @@ public:
     bool handleKeyPress(SDL_KeyboardEvent& key) override;
 
     /**
+        Draws this window. The shared pause can change while the menu is open,
+        so the notice and the Pause/Resume button are refreshed every frame.
+        \param  position    the position of this window
+    */
+    void draw(Point position) override;
+
+    /**
         This method is called, when the child window is about to be closed.
         This child window will be closed after this method returns.
         \param  pChildWindow    The child window that will be closed
@@ -51,21 +63,28 @@ public:
     void onSave();
     void onRestart();
     void onQuit();
+    void onSkipMission();
 
 private:
+    void updateMatchControls();
+
     bool bMultiplayer;
     int color;
 
     HBox    mainHBox;
     VBox    mainVBox;
+    Label   title;
     Label   onlineNotice;
 
-    TextButton  resumeButton;
-    TextButton  gameSettingsButton;
-    TextButton  restartGameButton;
-    TextButton  saveGameButton;
-    TextButton  loadGameButton;
-    TextButton  quitButton;
+    InGameMenuButton pauseGameButton;
+    InGameMenuButton  joinRequestsButton;
+    InGameMenuButton  resumeButton;
+    InGameMenuButton  gameSettingsButton;
+    InGameMenuButton  restartGameButton;
+    InGameMenuButton  saveGameButton;
+    InGameMenuButton  loadGameButton;
+    InGameMenuButton  quitButton;
+    InGameMenuButton  skipMissionButton;
 };
 
 

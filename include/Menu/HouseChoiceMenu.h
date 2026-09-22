@@ -32,7 +32,7 @@
 
 class HouseChoiceMenu : public MenuBase {
 public:
-    explicit HouseChoiceMenu(bool online = false, bool keepRules = false);
+    explicit HouseChoiceMenu(bool online = true, bool keepRules = false, bool showLobby = false);
     virtual ~HouseChoiceMenu();
 
     void onChildWindowClose(Window* pChildWindow) override;
@@ -65,7 +65,7 @@ private:
     VBox            optionsVBox;
 
     PictureLabel    selectYourHouseLabel;
-    Label titleLabel, selectedHouseLabel;
+    Label titleLabel, selectedHouseLabel, onlineDescription;
     DropDownBox connectionDropDown, journeyDropDown, visibilityDropDown;
     TextButton loadButton;
 
@@ -88,6 +88,7 @@ private:
     TextButton hostCoopButton;
     TextButton      gameOptionsButton;
 
+    bool showLobby;
     int currentHouseChoiceScrollPos;
 
     // Static storage for AI settings

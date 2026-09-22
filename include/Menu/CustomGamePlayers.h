@@ -51,7 +51,7 @@ class INIFile;
 class CustomGamePlayers : public MenuBase
 {
 public:
-    CustomGamePlayers(const GameInitSettings& newGameInitSettings, bool server = true, bool LANServer = true, CustomPlaySetup* setup = nullptr, const ChangeEventList* initialPlayers = nullptr);
+    CustomGamePlayers(const GameInitSettings& newGameInitSettings, bool server = true, bool LANServer = true, CustomPlaySetup* setup = nullptr, const ChangeEventList* initialPlayers = nullptr, bool startImmediately = false);
     virtual ~CustomGamePlayers();
     int showMenu() override;
 
@@ -82,6 +82,13 @@ private:
     void rebuildSetup(bool keepPlayers);
     CustomPlaySetup* setup = nullptr;
     bool restoringSetup = false;
+    bool startImmediately = false;
+    bool automaticStartPending = false;
+    bool installerApprovedForDisplay = false;
+    StaticContainer launchWidget;
+    Label launchTitle;
+    TextView launchStatus;
+    TextButton cancelLaunch;
     HBox setupMapRow, setupModeRow;
     DropDownBox setupMap, setupMod, setupConnection, setupVisibility;
     Checkbox setupShared;
@@ -96,6 +103,10 @@ private:
     void checkAllClientsReady();
     void updateDiscordGameStarting();
     void updateDiscordLobbyPresence();
+#ifdef __EMSCRIPTEN__
+    /// Browser: refresh the matched opponent's connection state label.
+    void updateOpponentLabel();
+#endif
     void onPeerDisconnected(const std::string& playername, bool bHost, int cause);
 
     void extractMapInfo(INIFile* pMap);
@@ -105,6 +116,7 @@ private:
     void onChangeHousesDropDownBoxes(bool bInteractive, int houseInfoNum = -1);
     void onChangeTeamDropDownBoxes(bool bInteractive, int houseInfoNum = -1);
     void onChangeColorDropDownBoxes(bool bInteractive, int houseInfoNum = -1);
+    void onChangeGraphicsSkinDropDownBoxes(bool bInteractive, int houseInfoNum = -1);
     void onBonusColorCheckbox(int houseInfoNum);
     void onChangePlayerDropDownBoxes(bool bInteractive, int boxnum);
     void onClickPlayerDropDownBox(int boxnum);
@@ -156,6 +168,10 @@ private:
     Label           mapPropertyAuthors;
     Label           mapPropertyLicense;
     Label           mapPropertyMod;
+#ifdef __EMSCRIPTEN__
+    Label           opponentLabel;   ///< Browser: the matched opponent's connection state.
+#endif
+    Label           mapPropertyCity;
 
     // bottom row of buttons
     HBox            buttonHBox;
@@ -176,6 +192,8 @@ private:
         DropDownBox     teamDropDown;
         Checkbox        bonusColorCheckbox;
         DropDownBox     colorDropDown;
+        Label           graphicsSkinLabel;
+        DropDownBox     graphicsSkinDropDown;
         HBox            playerHBox;
         PictureLabel    player1ArrowLabel;
         Label           player1Label;
@@ -188,6 +206,7 @@ private:
     std::array<int, MAX_CUSTOM_GAME_PLAYERS * 2> lastPlayerSelections{};
     bool                    bServer;
     bool                    bLANServer;
+    bool                    duneCitySkinControls;
     HouseInfo               houseInfo[MAX_CUSTOM_GAME_PLAYERS];
     int                     numHouses;
     std::list<HOUSETYPE>    boundHousesOnMap;
@@ -195,6 +214,9 @@ private:
     bool                    bConfigMismatchDetected;
     std::string             hostModName;                ///< The mod name sent by the host
     std::string             hostModChecksum;            ///< The mod checksum sent by the host
+    bool waitingForModInstall = false, rebuildAfterModTransfer = false;
+    bool communityModDownloadAttempted = false, communityModDownloadInProgress = false;
+    ChangeEventList delayedModChanges;
     bool                    bModDownloadInProgress;     ///< Whether mod download is in progress
     std::set<std::string>   clientsAckedMod;            ///< Clients that have acknowledged mod sync (host only)
     bool                    bWaitingForModAcks;         ///< Whether host is waiting for mod ACKs

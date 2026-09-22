@@ -46,7 +46,7 @@ public:
     void save(OutputStream& stream) const;
 
     void createSandRegions();
-    void damage(Uint32 damagerID, House* damagerOwner, const Coord& realPos, Uint32 bulletID, FixPoint damage, int damageRadius, bool air, bool affectTerrain = true);
+    void damage(Uint32 damagerID, House* damagerOwner, const Coord& realPos, Uint32 bulletID, FixPoint damage, int damageRadius, bool air, bool affectTerrain = true, Uint32 interceptedAirUnit = NONE_ID);
     static Coord getMapPos(int angle, const Coord& source);
     void removeObjectFromMap(Uint32 objectID);
     void spiceRemoved(const Coord& coord);
@@ -74,6 +74,7 @@ public:
     }
 
     void incrementPathingRevision() noexcept;
+    void restoreObserverPathingRevision(Uint32 revision) noexcept { pathingRevision=revision; }
 
     Sint32 getSizeX() const noexcept {
         return sizeX;
